@@ -8,7 +8,7 @@ def create_app():
     app.config.from_object(Config)
 
     db.init_app(app)
-    CORS(app, origins=app.config["CORS_ORIGINS"])
+    CORS(app, origins="*")
 
     from .api.appointments import bp as appts_bp
     from .api.dashboard    import bp as dashboard_bp
