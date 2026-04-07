@@ -246,22 +246,30 @@ def book_appointment():
 
     db.session.commit()
 
-    price_val   = float(updated["price"]) if updated["price"] else 0
-    charge_pct  = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)
-    absence_fee = round(price_val * charge_pct / 100)
+    price_val       = float(updated["price"]) if updated["price"] else 0
+    charge_pct      = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)
+    absence_fee     = round(price_val * charge_pct / 100)
+    cancel_window   = current_app.config.get("CANCEL_WINDOW_MINUTES", 90)
+    max_reschedules = current_app.config.get("MAX_RESCHEDULES", 1)
+    minutes_left    = _minutes_until(appt_utc)
+    can_cancel      = minutes_left > cancel_window
+    can_reschedule  = can_cancel  # rescheduled_count is 0 for a new booking
 
     return jsonify({
         "message": "Turno reservado exitosamente",
         "appointment": {
-            "id":           data["appointment_id"],
-            "booking_code": booking_code,
-            "qr_token":     qr_token,
-            "barber_name":  barber_row["name"] if barber_row else "",
-            "service_name": updated["service_name"],
-            "price":        price_val,
-            "absence_fee":  absence_fee,
-            "date":         local_t.strftime("%d/%m/%Y"),
-            "time":         local_t.strftime("%H:%M"),
+            "id":               data["appointment_id"],
+            "booking_code":     booking_code,
+            "qr_token":         qr_token,
+            "barber_name":      barber_row["name"] if barber_row else "",
+            "service_name":     updated["service_name"],
+            "price":            price_val,
+            "absence_fee":      absence_fee,
+            "date":             local_t.strftime("%d/%m/%Y"),
+            "time":             local_t.strftime("%H:%M"),
+            "can_cancel":       can_cancel,
+            "can_reschedule":   can_reschedule,
+            "rescheduled_count": 0,
         },
     }), 201
 
