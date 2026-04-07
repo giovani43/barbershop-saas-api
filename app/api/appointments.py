@@ -359,6 +359,70 @@ def get_appointment(appointment_id):
     })
 
 
+# ── GET /by-whatsapp — turno activo por número de WhatsApp ───────────────────
+
+@bp.get("/by-whatsapp")
+def get_by_whatsapp():
+    """Busca el turno activo (booked/rescheduled) de un número de WhatsApp."""
+    wa = (request.args.get("wa") or "").strip()
+    if not wa:
+        return jsonify({"error": "Falta el parámetro wa"}), 422
+
+    row = db.session.execute(text("""
+        SELECT
+            a.id::text,
+            a.appointment_time,
+            a.status,
+            a.service_name,
+            a.price,
+            a.booking_code,
+            a.qr_token,
+            a.rescheduled_count,
+            a.whatsapp_number,
+            b.id::text  AS barber_id,
+            b.name AS barber_name
+        FROM appointments a
+        JOIN barbers b ON b.id = a.barber_id
+        WHERE a.whatsapp_number = :wa
+          AND a.status IN ('booked', 'rescheduled')
+        ORDER BY a.appointment_time ASC
+        LIMIT 1
+    """), {"wa": wa}).mappings().first()
+
+    if not row:
+        return jsonify({"error": "No tenés un turno activo"}), 404
+
+    appt_utc = row["appointment_time"]
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    local_t = appt_utc.astimezone(ART)
+
+    minutes_left    = _minutes_until(row["appointment_time"])
+    can_cancel      = minutes_left > _cancel_window()
+    max_reschedules = current_app.config.get("MAX_RESCHEDULES", 1)
+    can_reschedule  = can_cancel and (row["rescheduled_count"] or 0) < max_reschedules
+
+    price_val   = float(row["price"]) if row["price"] else 0
+    charge_pct  = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)
+    absence_fee = round(price_val * charge_pct / 100)
+
+    return jsonify({
+        "id":               row["id"],
+        "booking_code":     row["booking_code"],
+        "barber_id":        row["barber_id"],
+        "barber_name":      row["barber_name"],
+        "service_name":     row["service_name"],
+        "price":            price_val,
+        "absence_fee":      absence_fee,
+        "date":             local_t.strftime("%d/%m/%Y"),
+        "time":             local_t.strftime("%H:%M"),
+        "status":           row["status"],
+        "can_cancel":       can_cancel,
+        "can_reschedule":   can_reschedule,
+        "rescheduled_count": row["rescheduled_count"] or 0,
+    })
+
+
 # ── GET /by-token/<qr_token> — verificación desde panel admin ────────────────
 
 @bp.get("/by-token/<qr_token>")
