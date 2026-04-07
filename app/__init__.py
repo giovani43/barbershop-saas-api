@@ -102,6 +102,7 @@ def _run_migrations():
         "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS absence_charge_sent   BOOLEAN DEFAULT FALSE",
         "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS absence_charge_amount INTEGER DEFAULT 0",
         "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS terms_accepted_at     TIMESTAMPTZ",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS password_hash         VARCHAR(256)",
         # Unique indexes (IF NOT EXISTS para idempotencia)
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_appt_qr_token      ON appointments (qr_token)      WHERE qr_token IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_appt_booking_code  ON appointments (booking_code)  WHERE booking_code IS NOT NULL",

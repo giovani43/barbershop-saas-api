@@ -55,27 +55,29 @@ class Barber(db.Model):
     specialty  = db.Column(db.String(200))
     bio        = db.Column(db.Text)
     whatsapp   = db.Column(db.String(50))
-    is_active  = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime(timezone=True),
-                           default=lambda: datetime.now(timezone.utc))
+    is_active     = db.Column(db.Boolean, default=True)
+    password_hash = db.Column(db.String(256), nullable=True)
+    created_at    = db.Column(db.DateTime(timezone=True),
+                              default=lambda: datetime.now(timezone.utc))
 
     shop         = db.relationship("Shop", back_populates="barbers", foreign_keys=[shop_id])
     appointments = db.relationship("Appointment", back_populates="barber", lazy="dynamic")
 
     def to_dict(self):
         return {
-            "id":        self.id,
-            "name":      self.name,
-            "slug":      self.slug,
-            "shop_id":   self.shop_id,
-            "shop_name": self.shop_name or (self.shop.name if self.shop else None),
-            "shop_slug": self.shop_slug or (self.shop.slug if self.shop else None),
-            "photo_url": self.photo_url,
-            "instagram": self.instagram,
-            "specialty": self.specialty,
-            "bio":       self.bio,
-            "whatsapp":  self.whatsapp,
-            "is_active": self.is_active,
+            "id":           self.id,
+            "name":         self.name,
+            "slug":         self.slug,
+            "shop_id":      self.shop_id,
+            "shop_name":    self.shop_name or (self.shop.name if self.shop else None),
+            "shop_slug":    self.shop_slug or (self.shop.slug if self.shop else None),
+            "photo_url":    self.photo_url,
+            "instagram":    self.instagram,
+            "specialty":    self.specialty,
+            "bio":          self.bio,
+            "whatsapp":     self.whatsapp,
+            "is_active":    self.is_active,
+            "has_password": bool(self.password_hash),
         }
 
 

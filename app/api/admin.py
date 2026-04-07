@@ -184,6 +184,19 @@ def delete_barber(shop, barber_id):
     db.session.commit()
     return jsonify({"ok": True})
 
+
+@bp.post("/barbers/<barber_id>/set-password")
+@admin_required
+def set_barber_password(shop, barber_id):
+    barber   = Barber.query.filter_by(id=barber_id, shop_id=shop.id).first_or_404()
+    data     = request.get_json() or {}
+    password = data.get("password", "").strip()
+    if len(password) < 4:
+        return jsonify({"error": "La contraseña debe tener al menos 4 caracteres"}), 422
+    barber.password_hash = generate_password_hash(password)
+    db.session.commit()
+    return jsonify({"ok": True})
+
 # ── Services ───────────────────────────────────────────────────────────────────
 
 @bp.get("/services")
