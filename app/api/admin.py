@@ -1,5 +1,6 @@
 import re
-from datetime import datetime, timezone
+import urllib.parse
+from datetime import datetime, timezone, timedelta
 from functools import wraps
 
 import pytz
@@ -259,7 +260,6 @@ def get_stats(shop):
     if not barber_ids:
         return jsonify({"stats": {"booked": 0, "total": 0, "revenue": 0, "barbers": 0}, "agenda": []})
 
-    # Build safe IN-list SQL (barber_ids are server-generated UUIDs)
     ids_placeholder = ", ".join(f"'{bid}'" for bid in barber_ids)
     rows = db.session.execute(text(f"""
         SELECT
@@ -270,7 +270,13 @@ def get_stats(shop):
             a.appointment_time,
             a.status,
             a.service_name,
-            a.price
+            a.price,
+            a.booking_code,
+            a.qr_token,
+            a.whatsapp_number,
+            a.absence_charge_amount,
+            a.absence_charge_sent,
+            a.rescheduled_count
         FROM appointments a
         JOIN  barbers b ON b.id = a.barber_id
         LEFT JOIN clients c ON c.id = a.client_id
@@ -282,6 +288,9 @@ def get_stats(shop):
     agenda        = []
     booked_count  = 0
     total_revenue = 0.0
+    late_minutes  = current_app.config.get("LATE_TOLERANCE_MINUTES", 8)
+    charge_pct    = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)
+    now_utc       = datetime.now(timezone.utc)
 
     for r in rows:
         appt_utc = r["appointment_time"]
@@ -289,20 +298,38 @@ def get_stats(shop):
             appt_utc = appt_utc.replace(tzinfo=timezone.utc)
         local_t = appt_utc.astimezone(ART)
 
-        if r["status"] == "booked":
+        if r["status"] in ("booked", "rescheduled"):
             booked_count  += 1
             total_revenue += float(r["price"]) if r["price"] else 0
 
+        price_val   = float(r["price"]) if r["price"] else 0
+        absence_fee = round(price_val * charge_pct / 100)
+
+        # Botón "Cobrar ausencia": turno ya pasó + tolerancia y sigue en booked/rescheduled
+        tolerance_dt   = appt_utc + timedelta(minutes=late_minutes)
+        show_no_show   = (
+            r["status"] in ("booked", "rescheduled")
+            and now_utc >= tolerance_dt
+        )
+
         agenda.append({
-            "id":           r["id"],
-            "barber_name":  r["barber_name"],
-            "client_name":  r["client_name"],
-            "client_wa":    r["client_wa"],
-            "hora":         local_t.strftime("%H:%M"),
-            "fecha":        local_t.strftime("%d/%m/%Y"),
-            "status":       r["status"],
-            "service_name": r["service_name"],
-            "price":        float(r["price"]) if r["price"] else 0,
+            "id":                   r["id"],
+            "barber_name":          r["barber_name"],
+            "client_name":          r["client_name"],
+            "client_wa":            r["client_wa"],
+            "hora":                 local_t.strftime("%H:%M"),
+            "fecha":                local_t.strftime("%d/%m/%Y"),
+            "status":               r["status"],
+            "service_name":         r["service_name"],
+            "price":                price_val,
+            "booking_code":         r["booking_code"],
+            "qr_token":             r["qr_token"],
+            "whatsapp_number":      r["whatsapp_number"],
+            "absence_fee":          absence_fee,
+            "absence_charge_amount": r["absence_charge_amount"] or 0,
+            "absence_charge_sent":  bool(r["absence_charge_sent"]),
+            "rescheduled_count":    r["rescheduled_count"] or 0,
+            "show_no_show_btn":     show_no_show,
         })
 
     return jsonify({
@@ -314,6 +341,86 @@ def get_stats(shop):
         },
         "agenda": agenda,
     })
+
+
+# ── POST /appointments/<id>/no-show ───────────────────────────────────────────
+
+@bp.post("/appointments/<appointment_id>/no-show")
+@admin_required
+def mark_no_show(shop, appointment_id):
+    """
+    El barbero marca el turno como ausente.
+    Calcula la multa (30% del servicio), la guarda y devuelve el link de WhatsApp.
+    """
+    appt = db.session.execute(text("""
+        SELECT a.*, b.shop_id, c.full_name AS client_name, c.whatsapp AS client_wa
+        FROM appointments a
+        JOIN barbers b ON b.id = a.barber_id
+        LEFT JOIN clients c ON c.id = a.client_id
+        WHERE a.id = :id
+    """), {"id": appointment_id}).mappings().first()
+
+    if not appt:
+        return jsonify({"error": "Turno no encontrado"}), 404
+    if appt["shop_id"] != shop.id:
+        return jsonify({"error": "No autorizado"}), 403
+    if appt["status"] not in ("booked", "rescheduled"):
+        return jsonify({"error": "Solo se puede cobrar ausencia en turnos reservados"}), 409
+
+    price_val   = float(appt["price"]) if appt["price"] else 0
+    charge_pct  = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)
+    absence_fee = round(price_val * charge_pct / 100)
+
+    # Formatear fecha/hora para el mensaje
+    appt_utc = appt["appointment_time"]
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    ART_tz  = pytz.timezone("America/Argentina/Buenos_Aires")
+    local_t = appt_utc.astimezone(ART_tz)
+    fecha   = local_t.strftime("%d/%m/%Y")
+    hora    = local_t.strftime("%H:%M")
+
+    frontend_url = current_app.config.get("FRONTEND_URL", "")
+    mp_alias     = current_app.config.get("MERCADOPAGO_ALIAS", "resquin.mvz")
+
+    client_name = appt["client_name"] or "cliente"
+    svc_name    = appt["service_name"] or "Servicio"
+
+    wa_msg = (
+        f"Hola {client_name} 👋, te contactamos desde MVZ Barbería.\n\n"
+        f"Lamentablemente no te presentaste a tu turno del {fecha} a las {hora}hs "
+        f"(o llegaste después de los 8 minutos de tolerancia permitidos).\n\n"
+        f"De acuerdo a los Términos y Condiciones que aceptaste al reservar, "
+        f"se aplica una multa del {charge_pct}% del valor del servicio como compensación "
+        f"por el tiempo reservado:\n\n"
+        f"💈 Servicio: {svc_name}\n"
+        f"💰 Valor del servicio: ${int(price_val):,}\n"
+        f"⚠️ Multa ({charge_pct}%): ${absence_fee:,}\n\n"
+        f"Por favor realizá el pago al siguiente alias de Mercado Pago:\n"
+        f"👉 {mp_alias}\n\n"
+        f"Para más información sobre nuestra política visitá:\n"
+        f"{frontend_url}/terminos"
+    )
+
+    wa_number = (appt["client_wa"] or appt["whatsapp_number"] or "").replace("+", "").replace(" ", "")
+    wa_link   = f"https://wa.me/{wa_number}?text={urllib.parse.quote(wa_msg)}"
+
+    db.session.execute(text("""
+        UPDATE appointments
+        SET status                = 'no_show',
+            absence_charge_amount = :fee,
+            absence_charge_sent   = TRUE,
+            updated_at            = NOW()
+        WHERE id = :id
+    """), {"fee": absence_fee, "id": appointment_id})
+
+    db.session.commit()
+
+    return jsonify({
+        "message":      "Turno marcado como ausente.",
+        "absence_fee":  absence_fee,
+        "wa_link":      wa_link,
+    }), 200
 
 # ── Client import (XLSX) ───────────────────────────────────────────────────────
 

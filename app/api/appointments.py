@@ -1,16 +1,42 @@
-from flask import Blueprint, request, jsonify
-from datetime import datetime, timezone
-from sqlalchemy.exc import IntegrityError
+import io
+import uuid
+from datetime import datetime, timezone, timedelta
+
+import pytz
+from flask import Blueprint, current_app, jsonify, request, send_file
 from sqlalchemy import text
-import pytz, uuid
-from datetime import timedelta
+from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
 
-bp = Blueprint("appointments", __name__)
+bp  = Blueprint("appointments", __name__)
 ART = pytz.timezone("America/Argentina/Buenos_Aires")
-CANCEL_WINDOW_MINUTES = 90
 
+
+# ── helpers ────────────────────────────────────────────────────────────────────
+
+def _cancel_window():
+    return current_app.config.get("CANCEL_WINDOW_MINUTES", 90)
+
+def _minutes_until(appt_time):
+    """Minutes remaining until appointment_time (UTC-aware)."""
+    appt_utc = appt_time
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    return (appt_utc - datetime.now(timezone.utc)).total_seconds() / 60
+
+def _next_booking_code() -> str:
+    """Generate next OE-XXXX code, autoincremental."""
+    row = db.session.execute(text("""
+        SELECT MAX(CAST(SUBSTRING(booking_code FROM 4) AS INTEGER))
+        FROM appointments
+        WHERE booking_code LIKE 'OE-%'
+    """)).scalar()
+    next_num = (row or 0) + 1
+    return f"OE-{next_num:04d}"
+
+
+# ── POST /create-slots ─────────────────────────────────────────────────────────
 
 @bp.post("/create-slots")
 def create_slots():
@@ -53,197 +79,10 @@ def create_slots():
     return jsonify({"message": f"Se crearon {len(slots_created)} slots", "slots": slots_created}), 201
 
 
-@bp.post("/book")
-def book_appointment():
-    data = request.get_json()
-    required = ["appointment_id", "full_name", "dni", "whatsapp"]
-    missing  = [f for f in required if not data.get(f)]
-    if missing:
-        return jsonify({"error": f"Campos faltantes: {', '.join(missing)}"}), 422
+# ── POST /generate-week ────────────────────────────────────────────────────────
 
-    dni       = str(data["dni"]).replace(".", "").strip()
-    whatsapp  = str(data["whatsapp"]).strip()
-    full_name = str(data["full_name"]).strip()
-
-    appt = db.session.execute(
-        text("SELECT * FROM appointments WHERE id = :id FOR UPDATE"),
-        {"id": data["appointment_id"]}
-    ).mappings().first()
-
-    if not appt:
-        return jsonify({"error": "Turno no encontrado"}), 404
-    if appt["status"] != "available":
-        return jsonify({"error": "Este turno ya no está disponible"}), 409
-
-    client = db.session.execute(
-        text("SELECT id FROM clients WHERE dni = :dni AND barber_id = :bid"),
-        {"dni": dni, "bid": str(appt["barber_id"])}
-    ).mappings().first()
-
-    if not client:
-        result = db.session.execute(text("""
-            INSERT INTO clients (full_name, dni, whatsapp, barber_id)
-            VALUES (:name, :dni, :wa, :bid)
-            RETURNING id
-        """), {"name": full_name, "dni": dni, "wa": whatsapp, "bid": str(appt["barber_id"])})
-        client_id = result.scalar()
-    else:
-        client_id = client["id"]
-
-    # Optionally stamp service info from catalogue
-    extra_sql    = ""
-    extra_params = {}
-    service_id   = data.get("service_id")
-    if service_id:
-        from app.models import Service
-        svc = db.session.get(Service, service_id)
-        if svc:
-            extra_sql    = ", service_name = :svc_name, price = :svc_price, service_id = :svc_id"
-            extra_params = {"svc_name": svc.name, "svc_price": float(svc.price), "svc_id": service_id}
-
-    db.session.execute(text(f"""
-        UPDATE appointments
-        SET status = 'booked', client_id = :client_id, updated_at = NOW() {extra_sql}
-        WHERE id = :id
-    """), {"client_id": str(client_id), "id": data["appointment_id"], **extra_params})
-
-    # Refresh the appointment to return human-readable confirmation details
-    updated = db.session.execute(
-        text("SELECT appointment_time, service_name, price, barber_id FROM appointments WHERE id = :id"),
-        {"id": data["appointment_id"]}
-    ).mappings().first()
-
-    barber_row = db.session.execute(
-        text("SELECT name FROM barbers WHERE id = :bid"),
-        {"bid": str(updated["barber_id"])}
-    ).mappings().first()
-
-    appt_utc = updated["appointment_time"]
-    if appt_utc.tzinfo is None:
-        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
-    local_t = appt_utc.astimezone(ART)
-
-    db.session.commit()
-    return jsonify({
-        "message": "Turno reservado exitosamente",
-        "appointment": {
-            "barber_name":  barber_row["name"] if barber_row else "",
-            "service_name": updated["service_name"],
-            "price":        float(updated["price"]) if updated["price"] else 0,
-            "date":         local_t.strftime("%d/%m/%Y"),
-            "time":         local_t.strftime("%H:%M"),
-        },
-    }), 201
-
-
-@bp.post("/<appointment_id>/cancel")
-def cancel_appointment(appointment_id):
-    data = request.get_json()
-    dni  = str(data.get("dni", "")).replace(".", "").strip()
-    if not dni:
-        return jsonify({"error": "Se requiere el DNI"}), 400
-
-    appt = db.session.execute(
-        text("SELECT * FROM appointments WHERE id = :id FOR UPDATE"),
-        {"id": appointment_id}
-    ).mappings().first()
-
-    if not appt or appt["status"] != "booked":
-        return jsonify({"error": "Turno no encontrado o no está reservado"}), 404
-
-    client = db.session.execute(
-        text("SELECT id FROM clients WHERE id = :cid AND dni = :dni"),
-        {"cid": str(appt["client_id"]), "dni": dni}
-    ).mappings().first()
-
-    if not client:
-        return jsonify({"error": "El DNI no corresponde a este turno"}), 403
-
-    now_utc       = datetime.now(timezone.utc)
-    appt_time_utc = appt["appointment_time"].replace(tzinfo=timezone.utc)
-    minutes_left  = (appt_time_utc - now_utc).total_seconds() / 60
-
-    if minutes_left < CANCEL_WINDOW_MINUTES:
-        return jsonify({
-            "error":             "Cancelación bloqueada",
-            "minutes_remaining": round(minutes_left, 1),
-            "message":           f"Faltan solo {int(minutes_left)} min. Contactá al barbero.",
-        }), 409
-
-    db.session.execute(text("""
-        UPDATE appointments
-        SET status = 'cancelled', client_id = NULL, cancelled_at = NOW(), updated_at = NOW()
-        WHERE id = :id
-    """), {"id": appointment_id})
-
-    db.session.execute(text("""
-        INSERT INTO appointments (barber_id, appointment_time, duration_minutes, status, service_name, price)
-        VALUES (:bid, :appt_time, :dur, 'available', :service, :price)
-        ON CONFLICT (barber_id, appointment_time) DO NOTHING
-    """), {
-        "bid": str(appt["barber_id"]), "appt_time": appt["appointment_time"],
-        "dur": appt["duration_minutes"], "service": appt["service_name"], "price": appt["price"]
-    })
-
-    db.session.commit()
-    return jsonify({"message": "Turno cancelado. El slot quedó libre."}), 200
-
-
-@bp.get("/day")
-def get_day():
-    barber_id = request.args.get("barber_id")
-    date_str  = request.args.get("date", datetime.now(ART).strftime("%Y-%m-%d"))
-    date      = datetime.strptime(date_str, "%Y-%m-%d").date()
-
-    # Construir el rango del día EN ARGENTINA y convertir a UTC para la query
-    start_utc = ART.localize(datetime(date.year, date.month, date.day, 0, 0)).astimezone(timezone.utc)
-    end_utc   = ART.localize(datetime(date.year, date.month, date.day, 23, 59)).astimezone(timezone.utc)
-
-    rows = db.session.execute(text("""
-        SELECT 
-            id::text,
-            appointment_time,
-            status,
-            service_name,
-            price
-        FROM appointments
-        WHERE barber_id = :bid
-          AND appointment_time BETWEEN :start AND :end
-        ORDER BY appointment_time
-    """), {"bid": barber_id, "start": start_utc, "end": end_utc}).mappings().all()
-
-    slots = []
-    for r in rows:
-        # appointment_time viene de PostgreSQL como datetime naive (sin tzinfo)
-        # Le asignamos UTC explícitamente y luego convertimos a Argentina
-        appt_utc = r["appointment_time"]
-        if appt_utc.tzinfo is None:
-            appt_utc = appt_utc.replace(tzinfo=timezone.utc)
-        
-        local_t = appt_utc.astimezone(ART)  # ← Convertir UTC → Argentina
-
-        slots.append({
-            "id":      r["id"],
-            "time":    local_t.strftime("%H:%M"),   # ← Hora correcta en ART
-            "date":    local_t.strftime("%d/%m/%Y"),
-            "status":  r["status"],
-            "service": r["service_name"],
-            "price":   float(r["price"]) if r["price"] else 0,
-        })
-
-    return jsonify({
-        "date":  date_str,
-        "slots": slots,
-        "stats": {
-            "total":     len(slots),
-            "available": sum(1 for s in slots if s["status"] == "available"),
-            "booked":    sum(1 for s in slots if s["status"] == "booked"),
-        }
-    })
-    
 @bp.post("/generate-week")
 def generate_week():
-    from datetime import timedelta
     data       = request.get_json() or {}
     barber_id  = data.get("barber_id")
     days       = data.get("days", 3)
@@ -283,3 +122,508 @@ def generate_week():
 
     db.session.commit()
     return jsonify({"message": f"Slots generados para {days} días", "total": total})
+
+
+# ── POST /book ─────────────────────────────────────────────────────────────────
+
+@bp.post("/book")
+def book_appointment():
+    data = request.get_json()
+    required = ["appointment_id", "full_name", "dni", "whatsapp"]
+    missing  = [f for f in required if not data.get(f)]
+    if missing:
+        return jsonify({"error": f"Campos faltantes: {', '.join(missing)}"}), 422
+
+    dni            = str(data["dni"]).replace(".", "").strip()
+    whatsapp       = str(data["whatsapp"]).strip()
+    full_name      = str(data["full_name"]).strip()
+    terms_accepted = data.get("terms_accepted", False)
+
+    # ── 1. Verificar turno activo por WhatsApp ─────────────────────────────
+    existing = db.session.execute(text("""
+        SELECT id FROM appointments
+        WHERE whatsapp_number = :wa
+          AND status IN ('booked', 'rescheduled')
+          AND appointment_time > NOW()
+        LIMIT 1
+    """), {"wa": whatsapp}).mappings().first()
+
+    if existing:
+        return jsonify({
+            "error":          "Ya tenés un turno activo. Cancelalo o completalo antes de reservar uno nuevo.",
+            "active_appt_id": str(existing["id"]),
+        }), 409
+
+    # ── 2. Traer y bloquear el slot ────────────────────────────────────────
+    appt = db.session.execute(
+        text("SELECT * FROM appointments WHERE id = :id FOR UPDATE"),
+        {"id": data["appointment_id"]}
+    ).mappings().first()
+
+    if not appt:
+        return jsonify({"error": "Turno no encontrado"}), 404
+    if appt["status"] != "available":
+        return jsonify({"error": "Este turno ya no está disponible"}), 409
+
+    # ── 3. Crear o recuperar client ────────────────────────────────────────
+    client = db.session.execute(
+        text("SELECT id FROM clients WHERE dni = :dni AND barber_id = :bid"),
+        {"dni": dni, "bid": str(appt["barber_id"])}
+    ).mappings().first()
+
+    if not client:
+        result = db.session.execute(text("""
+            INSERT INTO clients (full_name, dni, whatsapp, barber_id)
+            VALUES (:name, :dni, :wa, :bid)
+            RETURNING id
+        """), {"name": full_name, "dni": dni, "wa": whatsapp, "bid": str(appt["barber_id"])})
+        client_id = result.scalar()
+    else:
+        client_id = client["id"]
+
+    # ── 4. Datos del servicio ──────────────────────────────────────────────
+    service_sql    = ""
+    service_params = {}
+    service_id     = data.get("service_id")
+    if service_id:
+        from app.models import Service
+        svc = db.session.get(Service, service_id)
+        if svc:
+            service_sql    = ", service_name = :svc_name, price = :svc_price, service_id = :svc_id"
+            service_params = {
+                "svc_name":  svc.name,
+                "svc_price": float(svc.price),
+                "svc_id":    service_id,
+            }
+
+    # ── 5. Generar qr_token y booking_code ────────────────────────────────
+    qr_token     = str(uuid.uuid4())
+    booking_code = _next_booking_code()
+
+    # ── 6. terms_accepted_at ──────────────────────────────────────────────
+    terms_at_sql    = ""
+    terms_at_params = {}
+    if terms_accepted:
+        terms_at_sql    = ", terms_accepted_at = NOW()"
+
+    # ── 7. UPDATE del slot ─────────────────────────────────────────────────
+    db.session.execute(text(f"""
+        UPDATE appointments
+        SET status           = 'booked',
+            client_id        = :client_id,
+            whatsapp_number  = :wa,
+            qr_token         = :qr_token,
+            booking_code     = :booking_code,
+            rescheduled_count = 0,
+            updated_at       = NOW()
+            {service_sql}
+            {terms_at_sql}
+        WHERE id = :id
+    """), {
+        "client_id":    str(client_id),
+        "wa":           whatsapp,
+        "qr_token":     qr_token,
+        "booking_code": booking_code,
+        "id":           data["appointment_id"],
+        **service_params,
+    })
+
+    # ── 8. Leer datos para la respuesta ───────────────────────────────────
+    updated = db.session.execute(text("""
+        SELECT appointment_time, service_name, price, barber_id
+        FROM appointments WHERE id = :id
+    """), {"id": data["appointment_id"]}).mappings().first()
+
+    barber_row = db.session.execute(
+        text("SELECT name FROM barbers WHERE id = :bid"),
+        {"bid": str(updated["barber_id"])}
+    ).mappings().first()
+
+    appt_utc = updated["appointment_time"]
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    local_t = appt_utc.astimezone(ART)
+
+    db.session.commit()
+
+    price_val   = float(updated["price"]) if updated["price"] else 0
+    charge_pct  = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)
+    absence_fee = round(price_val * charge_pct / 100)
+
+    return jsonify({
+        "message": "Turno reservado exitosamente",
+        "appointment": {
+            "id":           data["appointment_id"],
+            "booking_code": booking_code,
+            "qr_token":     qr_token,
+            "barber_name":  barber_row["name"] if barber_row else "",
+            "service_name": updated["service_name"],
+            "price":        price_val,
+            "absence_fee":  absence_fee,
+            "date":         local_t.strftime("%d/%m/%Y"),
+            "time":         local_t.strftime("%H:%M"),
+        },
+    }), 201
+
+
+# ── GET /<id>/qr ───────────────────────────────────────────────────────────────
+
+@bp.get("/<appointment_id>/qr")
+def get_qr(appointment_id):
+    """Devuelve un PNG con el QR del turno."""
+    row = db.session.execute(
+        text("SELECT qr_token, booking_code FROM appointments WHERE id = :id"),
+        {"id": appointment_id}
+    ).mappings().first()
+
+    if not row or not row["qr_token"]:
+        return jsonify({"error": "Turno no encontrado o sin QR"}), 404
+
+    import qrcode
+    frontend_url = current_app.config.get("FRONTEND_URL", "")
+    qr_data = f"{frontend_url}/turno/{row['qr_token']}"
+
+    qr   = qrcode.QRCode(box_size=8, border=3)
+    qr.add_data(qr_data)
+    qr.make(fit=True)
+    img  = qr.make_image(fill_color="black", back_color="white")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
+
+
+# ── GET /<id> — detalle público del turno ────────────────────────────────────
+
+@bp.get("/<appointment_id>")
+def get_appointment(appointment_id):
+    """Detalle público de un turno (para la pantalla de éxito/cancelación)."""
+    row = db.session.execute(text("""
+        SELECT
+            a.id::text,
+            a.appointment_time,
+            a.status,
+            a.service_name,
+            a.price,
+            a.booking_code,
+            a.qr_token,
+            a.rescheduled_count,
+            a.whatsapp_number,
+            b.name AS barber_name
+        FROM appointments a
+        JOIN barbers b ON b.id = a.barber_id
+        WHERE a.id = :id
+    """), {"id": appointment_id}).mappings().first()
+
+    if not row:
+        return jsonify({"error": "Turno no encontrado"}), 404
+
+    appt_utc = row["appointment_time"]
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    local_t = appt_utc.astimezone(ART)
+
+    minutes_left  = _minutes_until(row["appointment_time"])
+    can_cancel    = minutes_left > _cancel_window()
+    max_reschedules = current_app.config.get("MAX_RESCHEDULES", 1)
+    can_reschedule  = can_cancel and (row["rescheduled_count"] or 0) < max_reschedules
+
+    price_val   = float(row["price"]) if row["price"] else 0
+    charge_pct  = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)
+    absence_fee = round(price_val * charge_pct / 100)
+
+    return jsonify({
+        "id":               row["id"],
+        "booking_code":     row["booking_code"],
+        "qr_token":         row["qr_token"],
+        "barber_name":      row["barber_name"],
+        "service_name":     row["service_name"],
+        "price":            price_val,
+        "absence_fee":      absence_fee,
+        "date":             local_t.strftime("%d/%m/%Y"),
+        "time":             local_t.strftime("%H:%M"),
+        "status":           row["status"],
+        "can_cancel":       can_cancel,
+        "can_reschedule":   can_reschedule,
+        "rescheduled_count": row["rescheduled_count"] or 0,
+        "whatsapp_number":  row["whatsapp_number"],
+    })
+
+
+# ── GET /by-token/<qr_token> — verificación desde panel admin ────────────────
+
+@bp.get("/by-token/<qr_token>")
+def get_by_token(qr_token):
+    """El barbero escanea el QR; retorna el detalle del turno."""
+    row = db.session.execute(text("""
+        SELECT
+            a.id::text,
+            a.appointment_time,
+            a.status,
+            a.service_name,
+            a.price,
+            a.booking_code,
+            a.rescheduled_count,
+            b.name  AS barber_name,
+            c.full_name AS client_name,
+            c.whatsapp  AS client_wa
+        FROM appointments a
+        JOIN barbers b ON b.id = a.barber_id
+        LEFT JOIN clients c ON c.id = a.client_id
+        WHERE a.qr_token = :token
+    """), {"token": qr_token}).mappings().first()
+
+    if not row:
+        return jsonify({"error": "QR inválido"}), 404
+
+    appt_utc = row["appointment_time"]
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    local_t = appt_utc.astimezone(ART)
+
+    return jsonify({
+        "id":               row["id"],
+        "booking_code":     row["booking_code"],
+        "barber_name":      row["barber_name"],
+        "client_name":      row["client_name"],
+        "client_wa":        row["client_wa"],
+        "service_name":     row["service_name"],
+        "price":            float(row["price"]) if row["price"] else 0,
+        "date":             local_t.strftime("%d/%m/%Y"),
+        "time":             local_t.strftime("%H:%M"),
+        "status":           row["status"],
+        "rescheduled_count": row["rescheduled_count"] or 0,
+    })
+
+
+# ── POST /<id>/cancel ─────────────────────────────────────────────────────────
+
+@bp.post("/<appointment_id>/cancel")
+def cancel_appointment(appointment_id):
+    data = request.get_json() or {}
+    dni  = str(data.get("dni", "")).replace(".", "").strip()
+    if not dni:
+        return jsonify({"error": "Se requiere el DNI"}), 400
+
+    appt = db.session.execute(
+        text("SELECT * FROM appointments WHERE id = :id FOR UPDATE"),
+        {"id": appointment_id}
+    ).mappings().first()
+
+    if not appt or appt["status"] not in ("booked", "rescheduled"):
+        return jsonify({"error": "Turno no encontrado o no está reservado"}), 404
+
+    client = db.session.execute(
+        text("SELECT id FROM clients WHERE id = :cid AND dni = :dni"),
+        {"cid": str(appt["client_id"]), "dni": dni}
+    ).mappings().first()
+
+    if not client:
+        return jsonify({"error": "El DNI no corresponde a este turno"}), 403
+
+    minutes_left = _minutes_until(appt["appointment_time"])
+    window       = _cancel_window()
+
+    if minutes_left < window:
+        price_val   = float(appt["price"]) if appt["price"] else 0
+        charge_pct  = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)
+        absence_fee = round(price_val * charge_pct / 100)
+        return jsonify({
+            "error":             "Cancelación bloqueada",
+            "minutes_remaining": round(minutes_left, 1),
+            "absence_fee":       absence_fee,
+            "message": (
+                f"Faltan solo {int(minutes_left)} min. "
+                f"La cancelación fuera de término genera un cargo de ${absence_fee:,}."
+            ),
+        }), 403
+
+    # Liberar el slot: vuelve a 'available' (sin recrear fila)
+    db.session.execute(text("""
+        UPDATE appointments
+        SET status          = 'available',
+            client_id       = NULL,
+            whatsapp_number = NULL,
+            qr_token        = NULL,
+            booking_code    = NULL,
+            rescheduled_count = 0,
+            cancelled_at    = NOW(),
+            updated_at      = NOW()
+        WHERE id = :id
+    """), {"id": appointment_id})
+
+    db.session.commit()
+    return jsonify({"message": "Turno cancelado. El slot quedó libre."}), 200
+
+
+# ── POST /<id>/reschedule ─────────────────────────────────────────────────────
+
+@bp.post("/<appointment_id>/reschedule")
+def reschedule_appointment(appointment_id):
+    """
+    Body: { dni, new_slot_id }
+    Mueve la reserva al nuevo slot si:
+      - Faltan >90 min al turno original
+      - rescheduled_count < MAX_RESCHEDULES
+    """
+    data        = request.get_json() or {}
+    dni         = str(data.get("dni", "")).replace(".", "").strip()
+    new_slot_id = data.get("new_slot_id")
+
+    if not dni or not new_slot_id:
+        return jsonify({"error": "Se requieren dni y new_slot_id"}), 400
+
+    # Traer turno original
+    appt = db.session.execute(
+        text("SELECT * FROM appointments WHERE id = :id FOR UPDATE"),
+        {"id": appointment_id}
+    ).mappings().first()
+
+    if not appt or appt["status"] not in ("booked", "rescheduled"):
+        return jsonify({"error": "Turno no encontrado o no está reservado"}), 404
+
+    # Verificar DNI
+    client = db.session.execute(
+        text("SELECT id FROM clients WHERE id = :cid AND dni = :dni"),
+        {"cid": str(appt["client_id"]), "dni": dni}
+    ).mappings().first()
+
+    if not client:
+        return jsonify({"error": "El DNI no corresponde a este turno"}), 403
+
+    # Verificar ventana de tiempo
+    minutes_left = _minutes_until(appt["appointment_time"])
+    window       = _cancel_window()
+    if minutes_left < window:
+        return jsonify({
+            "error":   "Reprogramación bloqueada",
+            "message": f"Solo podés reprogramar con más de {window} minutos de anticipación.",
+        }), 403
+
+    # Verificar límite de reprogramaciones
+    max_reschedules = current_app.config.get("MAX_RESCHEDULES", 1)
+    if (appt["rescheduled_count"] or 0) >= max_reschedules:
+        return jsonify({
+            "error":   "Límite de reprogramaciones alcanzado",
+            "message": "Solo se permite 1 reprogramación por reserva.",
+        }), 403
+
+    # Traer y bloquear nuevo slot
+    new_slot = db.session.execute(
+        text("SELECT * FROM appointments WHERE id = :id FOR UPDATE"),
+        {"id": new_slot_id}
+    ).mappings().first()
+
+    if not new_slot or new_slot["status"] != "available":
+        return jsonify({"error": "El nuevo turno no está disponible"}), 409
+
+    # Liberar slot original
+    db.session.execute(text("""
+        UPDATE appointments
+        SET status = 'available', client_id = NULL, whatsapp_number = NULL,
+            qr_token = NULL, booking_code = NULL, rescheduled_count = 0,
+            cancelled_at = NOW(), updated_at = NOW()
+        WHERE id = :id
+    """), {"id": appointment_id})
+
+    # Ocupar nuevo slot con los datos del cliente + incrementar rescheduled_count
+    db.session.execute(text("""
+        UPDATE appointments
+        SET status            = 'rescheduled',
+            client_id         = :client_id,
+            whatsapp_number   = :wa,
+            qr_token          = :qr_token,
+            booking_code      = :booking_code,
+            rescheduled_count = :rc,
+            service_id        = :svc_id,
+            service_name      = :svc_name,
+            price             = :price,
+            updated_at        = NOW()
+        WHERE id = :new_id
+    """), {
+        "client_id":    str(appt["client_id"]),
+        "wa":           appt["whatsapp_number"],
+        "qr_token":     appt["qr_token"],
+        "booking_code": appt["booking_code"],
+        "rc":           (appt["rescheduled_count"] or 0) + 1,
+        "svc_id":       appt["service_id"],
+        "svc_name":     appt["service_name"],
+        "price":        appt["price"],
+        "new_id":       new_slot_id,
+    })
+
+    db.session.commit()
+
+    # Devolver detalle del nuevo slot
+    updated = db.session.execute(text("""
+        SELECT a.appointment_time, a.service_name, a.price, b.name AS barber_name,
+               a.booking_code, a.qr_token
+        FROM appointments a JOIN barbers b ON b.id = a.barber_id
+        WHERE a.id = :id
+    """), {"id": new_slot_id}).mappings().first()
+
+    appt_utc = updated["appointment_time"]
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    local_t = appt_utc.astimezone(ART)
+
+    return jsonify({
+        "message": "Turno reprogramado exitosamente.",
+        "appointment": {
+            "id":           new_slot_id,
+            "booking_code": updated["booking_code"],
+            "qr_token":     updated["qr_token"],
+            "barber_name":  updated["barber_name"],
+            "service_name": updated["service_name"],
+            "price":        float(updated["price"]) if updated["price"] else 0,
+            "date":         local_t.strftime("%d/%m/%Y"),
+            "time":         local_t.strftime("%H:%M"),
+        },
+    }), 200
+
+
+# ── GET /day ──────────────────────────────────────────────────────────────────
+
+@bp.get("/day")
+def get_day():
+    barber_id = request.args.get("barber_id")
+    date_str  = request.args.get("date", datetime.now(ART).strftime("%Y-%m-%d"))
+    date      = datetime.strptime(date_str, "%Y-%m-%d").date()
+
+    start_utc = ART.localize(datetime(date.year, date.month, date.day,  0,  0)).astimezone(timezone.utc)
+    end_utc   = ART.localize(datetime(date.year, date.month, date.day, 23, 59)).astimezone(timezone.utc)
+
+    rows = db.session.execute(text("""
+        SELECT id::text, appointment_time, status, service_name, price
+        FROM appointments
+        WHERE barber_id = :bid
+          AND appointment_time BETWEEN :start AND :end
+        ORDER BY appointment_time
+    """), {"bid": barber_id, "start": start_utc, "end": end_utc}).mappings().all()
+
+    slots = []
+    for r in rows:
+        appt_utc = r["appointment_time"]
+        if appt_utc.tzinfo is None:
+            appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+        local_t = appt_utc.astimezone(ART)
+
+        slots.append({
+            "id":      r["id"],
+            "time":    local_t.strftime("%H:%M"),
+            "date":    local_t.strftime("%d/%m/%Y"),
+            "status":  r["status"],
+            "service": r["service_name"],
+            "price":   float(r["price"]) if r["price"] else 0,
+        })
+
+    return jsonify({
+        "date":  date_str,
+        "slots": slots,
+        "stats": {
+            "total":     len(slots),
+            "available": sum(1 for s in slots if s["status"] == "available"),
+            "booked":    sum(1 for s in slots if s["status"] in ("booked", "rescheduled")),
+        },
+    })
