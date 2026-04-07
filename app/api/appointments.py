@@ -289,7 +289,7 @@ def get_qr(appointment_id):
 
     import qrcode
     frontend_url = current_app.config.get("FRONTEND_URL", "")
-    qr_data = f"{frontend_url}/turno/{row['qr_token']}"
+    qr_data = f"{frontend_url}/admin/verify/{row['qr_token']}"
 
     qr   = qrcode.QRCode(box_size=8, border=3)
     qr.add_data(qr_data)
@@ -403,6 +403,30 @@ def get_by_token(qr_token):
         "status":           row["status"],
         "rescheduled_count": row["rescheduled_count"] or 0,
     })
+
+
+# ── POST /by-token/<qr_token>/complete — marcar turno como presente ───────────
+
+@bp.post("/by-token/<qr_token>/complete")
+def complete_by_token(qr_token):
+    """El barbero escanea el QR y marca el turno como completado."""
+    row = db.session.execute(
+        text("SELECT id, status FROM appointments WHERE qr_token = :token"),
+        {"token": qr_token}
+    ).mappings().first()
+
+    if not row:
+        return jsonify({"error": "QR inválido"}), 404
+
+    if row["status"] not in ("booked", "rescheduled"):
+        return jsonify({"error": f"El turno no se puede completar (estado: {row['status']})"}), 400
+
+    db.session.execute(
+        text("UPDATE appointments SET status = 'completed', qr_token = NULL WHERE id = :id"),
+        {"id": row["id"]}
+    )
+    db.session.commit()
+    return jsonify({"ok": True, "message": "Turno marcado como completado"})
 
 
 # ── POST /<id>/cancel ─────────────────────────────────────────────────────────
