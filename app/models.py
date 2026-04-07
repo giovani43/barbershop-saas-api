@@ -135,7 +135,15 @@ class Appointment(db.Model):
                                  default=lambda: datetime.now(timezone.utc))
     updated_at       = db.Column(db.DateTime(timezone=True),
                                  default=lambda: datetime.now(timezone.utc))
-    cancelled_at     = db.Column(db.DateTime(timezone=True), nullable=True)
+    cancelled_at          = db.Column(db.DateTime(timezone=True), nullable=True)
+    # ── New columns (added via migration) ────────────────────────────────────
+    whatsapp_number       = db.Column(db.String(50),  nullable=True)
+    qr_token              = db.Column(db.String(255), nullable=True, unique=True)
+    booking_code          = db.Column(db.String(20),  nullable=True, unique=True)
+    rescheduled_count     = db.Column(db.Integer,     default=0)
+    absence_charge_sent   = db.Column(db.Boolean,     default=False)
+    absence_charge_amount = db.Column(db.Integer,     default=0)
+    terms_accepted_at     = db.Column(db.DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         db.UniqueConstraint("barber_id", "appointment_time", name="uq_barber_time"),

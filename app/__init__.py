@@ -90,10 +90,21 @@ def _run_migrations():
         "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS whatsapp   VARCHAR(50)",
         "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS is_active  BOOLEAN DEFAULT TRUE",
         "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
-        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS service_id   VARCHAR(36)",
-        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ",
-        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS created_at   TIMESTAMPTZ DEFAULT NOW()",
-        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS updated_at   TIMESTAMPTZ DEFAULT NOW()",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS service_id            VARCHAR(36)",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS cancelled_at          TIMESTAMPTZ",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS created_at            TIMESTAMPTZ DEFAULT NOW()",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS updated_at            TIMESTAMPTZ DEFAULT NOW()",
+        # ── New columns ────────────────────────────────────────────────────────
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS whatsapp_number       VARCHAR(50)",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS qr_token              VARCHAR(255)",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS booking_code          VARCHAR(20)",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS rescheduled_count     INTEGER DEFAULT 0",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS absence_charge_sent   BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS absence_charge_amount INTEGER DEFAULT 0",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS terms_accepted_at     TIMESTAMPTZ",
+        # Unique indexes (IF NOT EXISTS para idempotencia)
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_appt_qr_token      ON appointments (qr_token)      WHERE qr_token IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_appt_booking_code  ON appointments (booking_code)  WHERE booking_code IS NOT NULL",
     ]
     for sql in stmts:
         try:
