@@ -128,33 +128,41 @@ def generate_week():
 
 @bp.post("/book")
 def book_appointment():
-    data = request.get_json()
-    required = ["appointment_id", "full_name", "dni", "whatsapp"]
+    data = request.get_json() or {}
+
+    # ── Validar campos requeridos ──────────────────────────────────────────
+    required = ["appointment_id", "user_id", "service_id"]
     missing  = [f for f in required if not data.get(f)]
     if missing:
         return jsonify({"error": f"Campos faltantes: {', '.join(missing)}"}), 422
 
-    dni            = str(data["dni"]).replace(".", "").strip()
-    whatsapp       = str(data["whatsapp"]).strip()
-    full_name      = str(data["full_name"]).strip()
     terms_accepted = data.get("terms_accepted", False)
 
-    # ── 1. Verificar turno activo por WhatsApp ─────────────────────────────
+    # ── 1. Verificar que el usuario existe ────────────────────────────────
+    from app.models import User
+    user = db.session.get(User, int(data["user_id"]))
+    if not user:
+        return jsonify({"error": "Usuario no encontrado. Registrate primero."}), 404
+
+    # ── 2. Verificar turno activo por DNI ─────────────────────────────────
     existing = db.session.execute(text("""
         SELECT id FROM appointments
-        WHERE whatsapp_number = :wa
-          AND status IN ('booked', 'rescheduled')
+        WHERE status IN ('booked', 'rescheduled')
           AND appointment_time > NOW()
+          AND (
+              user_id = :uid
+              OR client_id IN (SELECT id FROM clients WHERE dni = :dni)
+          )
         LIMIT 1
-    """), {"wa": whatsapp}).mappings().first()
+    """), {"uid": user.id, "dni": user.dni}).mappings().first()
 
     if existing:
         return jsonify({
-            "error":          "Ya tenés un turno activo. Cancelalo o completalo antes de reservar uno nuevo.",
+            "error":          "Ya tenés un turno activo. Cancelalo antes de reservar uno nuevo.",
             "active_appt_id": str(existing["id"]),
         }), 409
 
-    # ── 2. Traer y bloquear el slot ────────────────────────────────────────
+    # ── 3. Traer y bloquear el slot ────────────────────────────────────────
     appt = db.session.execute(
         text("SELECT * FROM appointments WHERE id = :id FOR UPDATE"),
         {"id": data["appointment_id"]}
@@ -165,10 +173,10 @@ def book_appointment():
     if appt["status"] != "available":
         return jsonify({"error": "Este turno ya no está disponible"}), 409
 
-    # ── 3. Crear o recuperar client ────────────────────────────────────────
+    # ── 4. Crear o recuperar client (para compat. con cancel/reschedule) ──
     client = db.session.execute(
         text("SELECT id FROM clients WHERE dni = :dni AND barber_id = :bid"),
-        {"dni": dni, "bid": str(appt["barber_id"])}
+        {"dni": user.dni, "bid": str(appt["barber_id"])}
     ).mappings().first()
 
     if not client:
@@ -176,7 +184,8 @@ def book_appointment():
             INSERT INTO clients (full_name, dni, whatsapp, barber_id)
             VALUES (:name, :dni, :wa, :bid)
             RETURNING id
-        """), {"name": full_name, "dni": dni, "wa": whatsapp, "bid": str(appt["barber_id"])})
+        """), {"name": user.name, "dni": user.dni, "wa": user.whatsapp,
+               "bid": str(appt["barber_id"])})
         client_id = result.scalar()
     else:
         client_id = client["id"]
@@ -201,30 +210,29 @@ def book_appointment():
     booking_code = _next_booking_code()
 
     # ── 6. terms_accepted_at ──────────────────────────────────────────────
-    terms_at_sql    = ""
-    terms_at_params = {}
-    if terms_accepted:
-        terms_at_sql    = ", terms_accepted_at = NOW()"
+    terms_at_sql = ", terms_accepted_at = NOW()" if terms_accepted else ""
 
     # ── 7. UPDATE del slot ─────────────────────────────────────────────────
     db.session.execute(text(f"""
         UPDATE appointments
-        SET status           = 'booked',
-            client_id        = :client_id,
-            whatsapp_number  = :wa,
-            qr_token         = :qr_token,
-            booking_code     = :booking_code,
+        SET status            = 'booked',
+            client_id         = :client_id,
+            user_id           = :user_id,
+            whatsapp_number   = :wa,
+            qr_token          = :qr_token,
+            booking_code      = :booking_code,
             rescheduled_count = 0,
-            updated_at       = NOW()
+            updated_at        = NOW()
             {service_sql}
             {terms_at_sql}
         WHERE id = :id
     """), {
-        "client_id":    str(client_id),
-        "wa":           whatsapp,
-        "qr_token":     qr_token,
+        "client_id":  str(client_id),
+        "user_id":    user.id,
+        "wa":         user.whatsapp,
+        "qr_token":   qr_token,
         "booking_code": booking_code,
-        "id":           data["appointment_id"],
+        "id":         data["appointment_id"],
         **service_params,
     })
 

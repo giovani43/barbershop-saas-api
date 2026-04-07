@@ -7,6 +7,24 @@ def _uuid():
     return str(uuid.uuid4())
 
 
+class User(db.Model):
+    __tablename__ = "users"
+
+    id         = db.Column(db.Integer, primary_key=True)
+    dni        = db.Column(db.String(20), unique=True, nullable=False)
+    name       = db.Column(db.String(100), nullable=False)
+    whatsapp   = db.Column(db.String(20), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            "id":       self.id,
+            "dni":      self.dni,
+            "name":     self.name,
+            "whatsapp": self.whatsapp,
+        }
+
+
 class Shop(db.Model):
     __tablename__ = "shops"
 

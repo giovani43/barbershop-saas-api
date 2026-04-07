@@ -15,12 +15,14 @@ def create_app():
     from .api.barbers      import bp as barbers_bp
     from .api.shops        import bp as shops_bp
     from .api.admin        import bp as admin_bp
+    from .api.users        import bp as users_bp
 
     app.register_blueprint(appts_bp,    url_prefix="/api/v1/appointments")
     app.register_blueprint(dashboard_bp, url_prefix="/api/v1/barber")
     app.register_blueprint(barbers_bp,  url_prefix="/api/v1/barbers")
     app.register_blueprint(shops_bp,    url_prefix="/api/v1/shops")
     app.register_blueprint(admin_bp,    url_prefix="/api/v1/admin")
+    app.register_blueprint(users_bp,    url_prefix="/api/v1/users")
 
     # Create new tables (shops, services) and add missing columns to existing ones
     with app.app_context():
