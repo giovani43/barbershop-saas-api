@@ -197,6 +197,29 @@ def set_barber_password(shop, barber_id):
     db.session.commit()
     return jsonify({"ok": True})
 
+# ── Appointment cleanup ────────────────────────────────────────────────────────
+
+@bp.delete("/appointments/by-codes")
+@admin_required
+def delete_appointments_by_codes(shop):
+    """Elimina turnos por booking_code (solo de esta shop)."""
+    data  = request.get_json() or {}
+    codes = data.get("codes", [])
+    if not codes:
+        return jsonify({"error": "Lista de códigos requerida"}), 422
+
+    result = db.session.execute(text("""
+        DELETE FROM appointments
+        WHERE booking_code = ANY(:codes)
+          AND barber_id IN (
+              SELECT id FROM barbers WHERE shop_id = :shop_id
+          )
+        RETURNING booking_code
+    """), {"codes": codes, "shop_id": shop.id})
+    deleted = [r[0] for r in result]
+    db.session.commit()
+    return jsonify({"deleted": deleted, "count": len(deleted)})
+
 # ── Services ───────────────────────────────────────────────────────────────────
 
 @bp.get("/services")

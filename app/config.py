@@ -20,5 +20,5 @@ class Config:
     ABSENCE_CHARGE_PERCENT = int(os.environ.get("ABSENCE_CHARGE_PERCENT", 30))
     MERCADOPAGO_ALIAS      = os.environ.get("MERCADOPAGO_ALIAS", "resquin.mvz")
     FRONTEND_URL           = os.environ.get(
-        "FRONTEND_URL", "https://barbershop-saas-1yart.vercel.app"
+        "FRONTEND_URL", "https://barbershop-saas-dbtwl7oak-giovani43s-projects.vercel.app"
     )
