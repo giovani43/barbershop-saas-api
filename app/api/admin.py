@@ -441,7 +441,7 @@ def mark_no_show(shop, appointment_id):
     )
 
     wa_number = (appt["client_wa"] or appt["whatsapp_number"] or "").replace("+", "").replace(" ", "")
-    wa_link   = f"https://wa.me/{wa_number}?text={urllib.parse.quote(wa_msg)}"
+    wa_link   = f"https://wa.me/{wa_number}?text={urllib.parse.quote(wa_msg)}" if wa_number else None
 
     db.session.execute(text("""
         UPDATE appointments

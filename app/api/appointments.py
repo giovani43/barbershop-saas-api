@@ -173,6 +173,26 @@ def book_appointment():
     if appt["status"] != "available":
         return jsonify({"error": "Este turno ya no está disponible"}), 409
 
+    # ── 3b. Verificar que el slot no esté bloqueado ───────────────────────
+    appt_utc_chk = appt["appointment_time"]
+    if appt_utc_chk.tzinfo is None:
+        appt_utc_chk = appt_utc_chk.replace(tzinfo=timezone.utc)
+    local_chk = appt_utc_chk.astimezone(ART)
+    is_blocked = db.session.execute(text("""
+        SELECT 1 FROM blocked_slots
+        WHERE barber_id    = :bid
+          AND blocked_date = :date
+          AND (all_day = TRUE OR blocked_time = :time::time)
+        LIMIT 1
+    """), {
+        "bid":  str(appt["barber_id"]),
+        "date": local_chk.date().isoformat(),
+        "time": local_chk.strftime("%H:%M"),
+    }).first()
+
+    if is_blocked:
+        return jsonify({"error": "Este horario no está disponible"}), 409
+
     # ── 4. Crear o recuperar client (para compat. con cancel/reschedule) ──
     client = db.session.execute(
         text("SELECT id FROM clients WHERE dni = :dni AND barber_id = :bid"),
@@ -198,6 +218,13 @@ def book_appointment():
         from app.models import Service
         svc = db.session.get(Service, service_id)
         if svc:
+            # Validate service belongs to the same shop as the barber
+            barber_shop = db.session.execute(
+                text("SELECT shop_id FROM barbers WHERE id = :bid"),
+                {"bid": str(appt["barber_id"])}
+            ).scalar()
+            if barber_shop and svc.shop_id != barber_shop:
+                return jsonify({"error": "El servicio no corresponde a esta barbería"}), 422
             service_sql    = ", service_name = :svc_name, price = :svc_price, service_id = :svc_id"
             service_params = {
                 "svc_name":  svc.name,
