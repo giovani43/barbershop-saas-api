@@ -103,10 +103,14 @@ def barber_day(barber):
             a.service_name,
             a.price,
             a.booking_code,
+            a.absence_charge_sent,
+            a.absence_charge_amount,
             c.full_name  AS client_name,
-            c.whatsapp   AS client_wa
+            c.whatsapp   AS client_wa,
+            COALESCE(c.dni, u.dni) AS client_dni
         FROM appointments a
         LEFT JOIN clients c ON c.id = a.client_id
+        LEFT JOIN users   u ON u.id = a.user_id
         WHERE a.barber_id = :bid
           AND a.appointment_time BETWEEN :start AND :end
         ORDER BY a.appointment_time
@@ -119,14 +123,17 @@ def barber_day(barber):
             appt_utc = appt_utc.replace(tzinfo=timezone.utc)
         local_t = appt_utc.astimezone(ART)
         slots.append({
-            "id":           r["id"],
-            "time":         local_t.strftime("%H:%M"),
-            "status":       r["status"],
-            "service_name": r["service_name"],
-            "price":        float(r["price"]) if r["price"] else 0,
-            "booking_code": r["booking_code"],
-            "client_name":  r["client_name"],
-            "client_wa":    r["client_wa"],
+            "id":                    r["id"],
+            "time":                  local_t.strftime("%H:%M"),
+            "status":                r["status"],
+            "service_name":          r["service_name"],
+            "price":                 float(r["price"]) if r["price"] else 0,
+            "booking_code":          r["booking_code"],
+            "absence_charge_sent":   bool(r["absence_charge_sent"]),
+            "absence_charge_amount": int(r["absence_charge_amount"] or 0),
+            "client_name":           r["client_name"],
+            "client_wa":             r["client_wa"],
+            "client_dni":            r["client_dni"],
         })
 
     return jsonify({"date": target.strftime("%d/%m/%Y"), "slots": slots})
@@ -203,6 +210,36 @@ def delete_blocked_slot(barber, slot_id):
 
     db.session.commit()
     return jsonify({"ok": True})
+
+
+# ── Cobrar ausencia ───────────────────────────────────────────────────────────
+
+@bp.post("/appointments/<appt_id>/charge-absence")
+@barber_required
+def charge_absence(barber, appt_id):
+    row = db.session.execute(text("""
+        SELECT id, price, status, absence_charge_sent
+        FROM appointments
+        WHERE id = :id AND barber_id = :bid
+    """), {"id": appt_id, "bid": barber.id}).mappings().first()
+
+    if not row:
+        return jsonify({"error": "Turno no encontrado"}), 404
+    if row["absence_charge_sent"]:
+        return jsonify({"error": "El cargo ya fue registrado"}), 409
+
+    charge = round(float(row["price"] or 0) * 0.30)
+
+    db.session.execute(text("""
+        UPDATE appointments
+        SET absence_charge_sent   = TRUE,
+            absence_charge_amount = :charge,
+            status                = 'no_show'
+        WHERE id = :id
+    """), {"charge": charge, "id": appt_id})
+    db.session.commit()
+
+    return jsonify({"ok": True, "charge": charge})
 
 
 # ── Legacy endpoint (backward compat) ─────────────────────────────────────────
