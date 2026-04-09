@@ -49,22 +49,27 @@ def barber_required(f):
 
 @bp.post("/login")
 def barber_login():
-    data     = request.get_json() or {}
-    slug     = data.get("slug", "").strip().lower()
-    password = data.get("password", "").strip()
+    try:
+        data     = request.get_json() or {}
+        slug     = data.get("slug", "").strip().lower()
+        password = data.get("password", "").strip()
 
-    if not slug or not password:
-        return jsonify({"error": "Slug y contraseña requeridos"}), 422
+        if not slug or not password:
+            return jsonify({"error": "Slug y contraseña requeridos"}), 422
 
-    barber = Barber.query.filter_by(slug=slug, is_active=True).first()
-    if not barber or not barber.password_hash:
-        return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
+        barber = Barber.query.filter_by(slug=slug, is_active=True).first()
+        if not barber or not barber.password_hash:
+            return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
-    if not check_password_hash(barber.password_hash, password):
-        return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
+        if not check_password_hash(barber.password_hash, password):
+            return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
-    token = _make_barber_token(barber.id)
-    return jsonify({"token": token, "barber": barber.to_dict()})
+        token = _make_barber_token(barber.id)
+        return jsonify({"token": token, "barber": barber.to_dict()})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": "internal", "detail": str(e),
+                        "trace": traceback.format_exc()}), 500
 
 
 # ── GET /me ────────────────────────────────────────────────────────────────────
