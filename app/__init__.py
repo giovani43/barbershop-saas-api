@@ -119,6 +119,19 @@ def _run_migrations():
         # Unique indexes (IF NOT EXISTS para idempotencia)
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_appt_qr_token      ON appointments (qr_token)      WHERE qr_token IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_appt_booking_code  ON appointments (booking_code)  WHERE booking_code IS NOT NULL",
+        # ── blocked_slots table ────────────────────────────────────────────────
+        """
+        CREATE TABLE IF NOT EXISTS blocked_slots (
+            id           SERIAL PRIMARY KEY,
+            barber_id    VARCHAR(36) REFERENCES barbers(id) ON DELETE CASCADE,
+            blocked_date DATE        NOT NULL,
+            blocked_time TIME,
+            all_day      BOOLEAN     NOT NULL DEFAULT FALSE,
+            reason       VARCHAR(100),
+            created_at   TIMESTAMP   DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_blocked_barber_date ON blocked_slots(barber_id, blocked_date)",
     ]
     for sql in stmts:
         try:

@@ -698,6 +698,19 @@ def get_day():
     start_utc = ART.localize(datetime(date.year, date.month, date.day,  0,  0)).astimezone(timezone.utc)
     end_utc   = ART.localize(datetime(date.year, date.month, date.day, 23, 59)).astimezone(timezone.utc)
 
+    # Fetch blocked slots for this barber/date
+    blocked_rows = db.session.execute(text("""
+        SELECT blocked_time, all_day FROM blocked_slots
+        WHERE barber_id = :bid AND blocked_date = :date
+    """), {"bid": barber_id, "date": date.isoformat()}).mappings().all()
+
+    blocked_all_day = any(b["all_day"] for b in blocked_rows)
+    blocked_times   = set()
+    for b in blocked_rows:
+        if not b["all_day"] and b["blocked_time"]:
+            t = b["blocked_time"]
+            blocked_times.add(f"{t.hour:02d}:{t.minute:02d}")
+
     rows = db.session.execute(text("""
         SELECT id::text, appointment_time, status, service_name, price
         FROM appointments
@@ -711,11 +724,17 @@ def get_day():
         appt_utc = r["appointment_time"]
         if appt_utc.tzinfo is None:
             appt_utc = appt_utc.replace(tzinfo=timezone.utc)
-        local_t = appt_utc.astimezone(ART)
+        local_t      = appt_utc.astimezone(ART)
+        local_time   = local_t.strftime("%H:%M")
+        is_blocked   = blocked_all_day or local_time in blocked_times
+
+        # Skip available slots that are blocked
+        if r["status"] == "available" and is_blocked:
+            continue
 
         slots.append({
             "id":      r["id"],
-            "time":    local_t.strftime("%H:%M"),
+            "time":    local_time,
             "date":    local_t.strftime("%d/%m/%Y"),
             "status":  r["status"],
             "service": r["service_name"],

@@ -132,6 +132,79 @@ def barber_day(barber):
     return jsonify({"date": target.strftime("%d/%m/%Y"), "slots": slots})
 
 
+# ── Blocked slots ──────────────────────────────────────────────────────────────
+
+@bp.post("/blocked-slots")
+@barber_required
+def create_blocked_slot(barber):
+    data     = request.get_json() or {}
+    date_str = (data.get("date") or "").strip()
+    time_str = (data.get("time") or "").strip() or None
+    all_day  = bool(data.get("all_day", False))
+    reason   = (data.get("reason") or "").strip()[:100] or None
+
+    if not date_str:
+        return jsonify({"error": "Fecha requerida"}), 422
+    if not all_day and not time_str:
+        return jsonify({"error": "Indicá un horario o marcá 'Todo el día'"}), 422
+
+    row = db.session.execute(text("""
+        INSERT INTO blocked_slots (barber_id, blocked_date, blocked_time, all_day, reason)
+        VALUES (:bid, :date, :time, :all_day, :reason)
+        RETURNING id, blocked_date::text, blocked_time::text, all_day, reason
+    """), {
+        "bid":     barber.id,
+        "date":    date_str,
+        "time":    time_str if not all_day else None,
+        "all_day": all_day,
+        "reason":  reason,
+    }).mappings().first()
+    db.session.commit()
+
+    return jsonify({
+        "id":      row["id"],
+        "date":    row["blocked_date"],
+        "time":    row["blocked_time"],
+        "all_day": row["all_day"],
+        "reason":  row["reason"],
+    }), 201
+
+
+@bp.get("/blocked-slots")
+@barber_required
+def list_blocked_slots(barber):
+    rows = db.session.execute(text("""
+        SELECT id, blocked_date::text, blocked_time::text, all_day, reason
+        FROM blocked_slots
+        WHERE barber_id = :bid AND blocked_date >= CURRENT_DATE
+        ORDER BY blocked_date, blocked_time NULLS FIRST
+    """), {"bid": barber.id}).mappings().all()
+
+    return jsonify([{
+        "id":      r["id"],
+        "date":    r["blocked_date"],
+        "time":    r["blocked_time"],
+        "all_day": r["all_day"],
+        "reason":  r["reason"],
+    } for r in rows])
+
+
+@bp.delete("/blocked-slots/<int:slot_id>")
+@barber_required
+def delete_blocked_slot(barber, slot_id):
+    result = db.session.execute(text("""
+        DELETE FROM blocked_slots
+        WHERE id = :id AND barber_id = :bid
+        RETURNING id
+    """), {"id": slot_id, "bid": barber.id})
+
+    if not result.fetchone():
+        return jsonify({"error": "Bloqueo no encontrado"}), 404
+
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
 # ── Legacy endpoint (backward compat) ─────────────────────────────────────────
 
 @bp.route("/dashboard", methods=["GET"])
