@@ -223,7 +223,7 @@ def book_appointment():
                 text("SELECT shop_id FROM barbers WHERE id = :bid"),
                 {"bid": str(appt["barber_id"])}
             ).scalar()
-            if barber_shop and svc.shop_id != barber_shop:
+            if barber_shop and svc.shop_id and svc.shop_id != barber_shop:
                 return jsonify({"error": "El servicio no corresponde a esta barbería"}), 422
             service_sql    = ", service_name = :svc_name, price = :svc_price, service_id = :svc_id"
             service_params = {
