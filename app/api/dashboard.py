@@ -64,7 +64,7 @@ def barber_login():
         if not check_password_hash(barber.password_hash, password):
             return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
-        token = _make_barber_token(barber.id)
+        token = _make_barber_token(str(barber.id))
         return jsonify({"token": token, "barber": barber.to_dict()})
     except Exception as e:
         import traceback

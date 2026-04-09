@@ -726,10 +726,14 @@ def get_day():
     end_utc   = ART.localize(datetime(date.year, date.month, date.day, 23, 59)).astimezone(timezone.utc)
 
     # Fetch blocked slots for this barber/date
-    blocked_rows = db.session.execute(text("""
-        SELECT blocked_time, all_day FROM blocked_slots
-        WHERE barber_id = :bid AND blocked_date = :date
-    """), {"bid": barber_id, "date": date.isoformat()}).mappings().all()
+    try:
+        blocked_rows = db.session.execute(text("""
+            SELECT blocked_time, all_day FROM blocked_slots
+            WHERE barber_id = :bid AND blocked_date = :date
+        """), {"bid": barber_id, "date": date.isoformat()}).mappings().all()
+    except Exception:
+        db.session.rollback()
+        blocked_rows = []
 
     blocked_all_day = any(b["all_day"] for b in blocked_rows)
     blocked_times   = set()

@@ -136,6 +136,6 @@ def _run_migrations():
     for sql in stmts:
         try:
             db.session.execute(text(sql))
+            db.session.commit()
         except Exception:
             db.session.rollback()
-    db.session.commit()
