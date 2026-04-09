@@ -172,6 +172,12 @@ def update_barber(shop, barber_id):
     for field in ("name", "photo_url", "specialty", "bio", "whatsapp", "instagram", "is_active"):
         if field in data:
             setattr(barber, field, data[field])
+    if "slug" in data and data["slug"]:
+        new_slug = data["slug"].strip().lower()
+        conflict = Barber.query.filter(Barber.slug == new_slug, Barber.id != barber_id).first()
+        if conflict:
+            return jsonify({"error": "Ese slug ya está en uso"}), 409
+        barber.slug = new_slug
     db.session.commit()
     return jsonify(barber.to_dict())
 
