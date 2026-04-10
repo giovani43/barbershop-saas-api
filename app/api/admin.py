@@ -524,3 +524,74 @@ def import_clients(shop):
 
     db.session.commit()
     return jsonify({"created": created, "errors": errors})
+
+
+# ── Temporary: force-run all migrations ───────────────────────────────────────
+@bp.get("/run-migrations")
+def run_migrations_endpoint():
+    """Force-run all idempotent migrations. Safe to call multiple times."""
+    from app import _run_migrations
+    results = []
+    from sqlalchemy import text as _text
+
+    stmts = [
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS shop_id    VARCHAR(36)",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS shop_name  VARCHAR(200)",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS shop_slug  VARCHAR(100)",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS photo_url  VARCHAR(500)",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS instagram  VARCHAR(200)",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS specialty  VARCHAR(200)",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS bio        TEXT",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS whatsapp   VARCHAR(50)",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS is_active  BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS service_id            VARCHAR(36)",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS cancelled_at          TIMESTAMPTZ",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS created_at            TIMESTAMPTZ DEFAULT NOW()",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS updated_at            TIMESTAMPTZ DEFAULT NOW()",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS whatsapp_number       VARCHAR(50)",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS qr_token              VARCHAR(255)",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS booking_code          VARCHAR(20)",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS rescheduled_count     INTEGER DEFAULT 0",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS absence_charge_sent   BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS absence_charge_amount INTEGER DEFAULT 0",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS terms_accepted_at     TIMESTAMPTZ",
+        "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS password_hash         VARCHAR(256)",
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id         SERIAL PRIMARY KEY,
+            dni        VARCHAR(20) UNIQUE NOT NULL,
+            name       VARCHAR(100) NOT NULL,
+            whatsapp   VARCHAR(20) NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+        """,
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_appt_qr_token      ON appointments (qr_token)      WHERE qr_token IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_appt_booking_code  ON appointments (booking_code)  WHERE booking_code IS NOT NULL",
+        """
+        CREATE TABLE IF NOT EXISTS blocked_slots (
+            id           SERIAL PRIMARY KEY,
+            barber_id    VARCHAR(36) REFERENCES barbers(id) ON DELETE CASCADE,
+            blocked_date DATE        NOT NULL,
+            blocked_time TIME,
+            all_day      BOOLEAN     NOT NULL DEFAULT FALSE,
+            reason       VARCHAR(100),
+            created_at   TIMESTAMP   DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_blocked_barber_date ON blocked_slots(barber_id, blocked_date)",
+        "ALTER TABLE shops ADD COLUMN IF NOT EXISTS owner_email VARCHAR(200)",
+    ]
+
+    for sql in stmts:
+        label = sql.strip().splitlines()[0][:80]
+        try:
+            db.session.execute(_text(sql))
+            db.session.commit()
+            results.append({"sql": label, "status": "ok"})
+        except Exception as e:
+            db.session.rollback()
+            results.append({"sql": label, "status": "error", "detail": str(e)})
+
+    return jsonify({"migrations": results})
