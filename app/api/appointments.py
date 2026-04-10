@@ -128,7 +128,27 @@ def generate_week():
 
 @bp.post("/book")
 def book_appointment():
+    import logging, traceback as _tb
+    _log = logging.getLogger(__name__)
+
+    try:
+        return _book_appointment_inner()
+    except Exception as exc:
+        _log.error("book_appointment UNHANDLED: %s\n%s", exc, _tb.format_exc())
+        db.session.rollback()
+        return jsonify({
+            "error":  "Error interno al reservar",
+            "detail": str(exc),
+            "trace":  _tb.format_exc(),
+        }), 500
+
+
+def _book_appointment_inner():
+    import logging
+    _log = logging.getLogger(__name__)
+
     data = request.get_json() or {}
+    _log.info("book payload: %s", data)
 
     # ── Validar campos requeridos ──────────────────────────────────────────
     required = ["appointment_id", "user_id", "service_id"]
@@ -139,6 +159,7 @@ def book_appointment():
     terms_accepted = data.get("terms_accepted", False)
 
     # ── 1. Verificar que el usuario existe ────────────────────────────────
+    _log.info("step 1: lookup user_id=%s", data.get("user_id"))
     from app.models import User
     user = db.session.get(User, int(data["user_id"]))
     if not user:
