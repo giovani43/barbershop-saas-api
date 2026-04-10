@@ -572,7 +572,7 @@ def run_migrations_endpoint():
         """
         CREATE TABLE IF NOT EXISTS blocked_slots (
             id           SERIAL PRIMARY KEY,
-            barber_id    VARCHAR(36) REFERENCES barbers(id) ON DELETE CASCADE,
+            barber_id    UUID REFERENCES barbers(id) ON DELETE CASCADE,
             blocked_date DATE        NOT NULL,
             blocked_time TIME,
             all_day      BOOLEAN     NOT NULL DEFAULT FALSE,
