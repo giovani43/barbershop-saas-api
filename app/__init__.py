@@ -16,13 +16,15 @@ def create_app():
     from .api.shops        import bp as shops_bp
     from .api.admin        import bp as admin_bp
     from .api.users        import bp as users_bp
+    from .api.barbershop   import bp as barbershop_bp
 
-    app.register_blueprint(appts_bp,    url_prefix="/api/v1/appointments")
-    app.register_blueprint(dashboard_bp, url_prefix="/api/v1/barber")
-    app.register_blueprint(barbers_bp,  url_prefix="/api/v1/barbers")
-    app.register_blueprint(shops_bp,    url_prefix="/api/v1/shops")
-    app.register_blueprint(admin_bp,    url_prefix="/api/v1/admin")
-    app.register_blueprint(users_bp,    url_prefix="/api/v1/users")
+    app.register_blueprint(appts_bp,      url_prefix="/api/v1/appointments")
+    app.register_blueprint(dashboard_bp,  url_prefix="/api/v1/barber")
+    app.register_blueprint(barbers_bp,    url_prefix="/api/v1/barbers")
+    app.register_blueprint(shops_bp,      url_prefix="/api/v1/shops")
+    app.register_blueprint(admin_bp,      url_prefix="/api/v1/admin")
+    app.register_blueprint(users_bp,      url_prefix="/api/v1/users")
+    app.register_blueprint(barbershop_bp, url_prefix="/api/v1/barbershop")
 
     # Create new tables (shops, services) and add missing columns to existing ones
     with app.app_context():
@@ -132,6 +134,8 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_blocked_barber_date ON blocked_slots(barber_id, blocked_date)",
+        # ── shops.owner_email (auto-registro multi-tenant) ─────────────────────
+        "ALTER TABLE shops ADD COLUMN IF NOT EXISTS owner_email VARCHAR(200)",
     ]
     for sql in stmts:
         try:

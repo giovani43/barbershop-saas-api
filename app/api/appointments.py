@@ -281,6 +281,28 @@ def book_appointment():
 
     db.session.commit()
 
+    # ── Notificación WhatsApp a la barbería (no bloquea) ──────────────────────
+    try:
+        shop_row = db.session.execute(text("""
+            SELECT s.whatsapp, s.name FROM barbers b
+            JOIN shops s ON s.id = b.shop_id
+            WHERE b.id = :bid
+        """), {"bid": str(updated["barber_id"])}).mappings().first()
+
+        if shop_row and shop_row["whatsapp"]:
+            from app.services.notifications import notify_barbershop
+            notify_barbershop(
+                to_number   = shop_row["whatsapp"],
+                client_name = user.name,
+                barber_name = barber_row["name"] if barber_row else "",
+                shop_name   = shop_row["name"] or "",
+                fecha       = local_t.strftime("%d/%m/%Y"),
+                hora        = local_t.strftime("%H:%M"),
+            )
+    except Exception as _notify_err:
+        import logging
+        logging.getLogger(__name__).error("Notification error: %s", _notify_err)
+
     price_val       = float(updated["price"]) if updated["price"] else 0
     charge_pct      = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)
     absence_fee     = round(price_val * charge_pct / 100)

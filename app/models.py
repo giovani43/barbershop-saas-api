@@ -36,6 +36,7 @@ class Shop(db.Model):
     whatsapp            = db.Column(db.String(50))
     plan                = db.Column(db.String(20), default="solo")   # 'solo' | 'shop'
     flash_promo_active  = db.Column(db.Boolean, default=False)
+    owner_email         = db.Column(db.String(200), nullable=True)
     admin_password_hash = db.Column(db.String(256))
     created_at          = db.Column(db.DateTime(timezone=True),
                                     default=lambda: datetime.now(timezone.utc))

@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
-    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-key")
+    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-key-change-in-production")
     SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL", "").replace(
         "postgres://", "postgresql://"
     )
@@ -18,7 +18,12 @@ class Config:
     LATE_TOLERANCE_MINUTES = int(os.environ.get("LATE_TOLERANCE_MINUTES",  8))
     MAX_RESCHEDULES        = int(os.environ.get("MAX_RESCHEDULES",          1))
     ABSENCE_CHARGE_PERCENT = int(os.environ.get("ABSENCE_CHARGE_PERCENT", 30))
-    MERCADOPAGO_ALIAS      = os.environ.get("MERCADOPAGO_ALIAS", "resquin.mvz")
-    FRONTEND_URL           = os.environ.get(
-        "FRONTEND_URL", "https://barbershop-saas-dbtwl7oak-giovani43s-projects.vercel.app"
-    )
+
+    # ── Branding / URLs (set in Railway, no hardcoded production values) ───────
+    MERCADOPAGO_ALIAS = os.environ.get("MERCADOPAGO_ALIAS", "")
+    FRONTEND_URL      = os.environ.get("FRONTEND_URL", "")
+
+    # ── Twilio WhatsApp (set in Railway) ───────────────────────────────────────
+    TWILIO_ACCOUNT_SID    = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    TWILIO_AUTH_TOKEN     = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    TWILIO_WHATSAPP_FROM  = os.environ.get("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
