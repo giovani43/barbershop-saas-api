@@ -42,40 +42,46 @@ def create_app():
         from datetime import datetime, timezone, timedelta
         import pytz
 
-        ART       = pytz.timezone("America/Argentina/Buenos_Aires")
-        BARBER_ID = "e6f0681a-9724-4425-9f5e-1ee188899e02"
-        today     = datetime.now(ART).date()
-        total     = 0
+        ART   = pytz.timezone("America/Argentina/Buenos_Aires")
+        today = datetime.now(ART).date()
+        total = 0
 
-        for day_offset in range(3):
-            target_date = today + timedelta(days=day_offset)
-            current_hour, current_min = 9, 0
+        # Fetch all active barbers dynamically
+        rows = db.session.execute(text(
+            "SELECT id FROM barbers WHERE is_active = TRUE"
+        )).fetchall()
+        barber_ids = [str(r[0]) for r in rows]
 
-            while True:
-                local_dt = ART.localize(datetime(
-                    target_date.year, target_date.month, target_date.day,
-                    current_hour, current_min
-                ))
-                utc_dt = local_dt.astimezone(timezone.utc)
+        for bid in barber_ids:
+            for day_offset in range(7):
+                target_date = today + timedelta(days=day_offset)
+                current_hour, current_min = 9, 0
 
-                db.session.execute(text("""
-                    INSERT INTO appointments 
-                        (barber_id, appointment_time, status, service_name, price)
-                    VALUES 
-                        (:bid, :appt_time, 'available', 'Corte + Barba', 3500)
-                    ON CONFLICT (barber_id, appointment_time) DO NOTHING
-                """), {"bid": BARBER_ID, "appt_time": utc_dt})
+                while True:
+                    local_dt = ART.localize(datetime(
+                        target_date.year, target_date.month, target_date.day,
+                        current_hour, current_min
+                    ))
+                    utc_dt = local_dt.astimezone(timezone.utc)
 
-                total += 1
-                current_min += 30
-                if current_min >= 60:
-                    current_min -= 60
-                    current_hour += 1
-                if current_hour >= 18:
-                    break
+                    db.session.execute(text("""
+                        INSERT INTO appointments
+                            (barber_id, appointment_time, status, service_name, price)
+                        VALUES
+                            (:bid, :appt_time, 'available', 'Corte', 15000)
+                        ON CONFLICT (barber_id, appointment_time) DO NOTHING
+                    """), {"bid": bid, "appt_time": utc_dt})
+
+                    total += 1
+                    current_min += 30
+                    if current_min >= 60:
+                        current_min -= 60
+                        current_hour += 1
+                    if current_hour >= 18:
+                        break
 
         db.session.commit()
-        return {"status": "ok", "slots_generados": total}
+        return {"status": "ok", "barbers": len(barber_ids), "slots_generados": total}
 
     return app
 
