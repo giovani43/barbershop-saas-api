@@ -182,7 +182,7 @@ def book_appointment():
         SELECT 1 FROM blocked_slots
         WHERE barber_id    = :bid
           AND blocked_date = :date
-          AND (all_day = TRUE OR blocked_time = :time::time)
+          AND (all_day = TRUE OR blocked_time = CAST(:time AS time))
         LIMIT 1
     """), {
         "bid":  str(appt["barber_id"]),
