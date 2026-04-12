@@ -305,7 +305,7 @@ def _book_appointment_inner():
     # ── Notificación WhatsApp a la barbería (no bloquea) ──────────────────────
     try:
         shop_row = db.session.execute(text("""
-            SELECT s.whatsapp, s.name FROM barbers b
+            SELECT s.whatsapp AS whatsapp, s.name FROM barbers b
             JOIN shops s ON s.id = b.shop_id
             WHERE b.id = :bid
         """), {"bid": str(updated["barber_id"])}).mappings().first()
@@ -366,7 +366,9 @@ def get_qr(appointment_id):
         return jsonify({"error": "Turno no encontrado o sin QR"}), 404
 
     import qrcode
-    frontend_url = current_app.config.get("FRONTEND_URL", "")
+    frontend_url = current_app.config.get("FRONTEND_URL", "").rstrip("/")
+    if not frontend_url:
+        return jsonify({"error": "FRONTEND_URL no configurada en el servidor"}), 500
     qr_data = f"{frontend_url}/admin/verify/{row['qr_token']}"
 
     qr   = qrcode.QRCode(box_size=8, border=3)
