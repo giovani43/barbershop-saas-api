@@ -10,11 +10,12 @@ def _uuid():
 class User(db.Model):
     __tablename__ = "users"
 
-    id         = db.Column(db.Integer, primary_key=True)
-    dni        = db.Column(db.String(20), unique=True, nullable=False)
-    name       = db.Column(db.String(100), nullable=False)
-    whatsapp   = db.Column(db.String(20), nullable=False)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    id            = db.Column(db.Integer, primary_key=True)
+    dni           = db.Column(db.String(20), unique=True, nullable=False)
+    name          = db.Column(db.String(100), nullable=False)
+    whatsapp      = db.Column(db.String(20), nullable=False)
+    password_hash = db.Column(db.String(256), nullable=True)
+    created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
         return {
@@ -165,6 +166,8 @@ class Appointment(db.Model):
     absence_charge_sent   = db.Column(db.Boolean,     default=False)
     absence_charge_amount = db.Column(db.Integer,     default=0)
     terms_accepted_at     = db.Column(db.DateTime(timezone=True), nullable=True)
+    verified_at           = db.Column(db.DateTime(timezone=True), nullable=True)
+    verified_by           = db.Column(db.String(36), nullable=True)
 
     __table_args__ = (
         db.UniqueConstraint("barber_id", "appointment_time", name="uq_barber_time"),

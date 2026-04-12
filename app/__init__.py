@@ -1,7 +1,13 @@
-from flask import Flask
+import logging
+
+from flask import Flask, jsonify
 from flask_cors import CORS
+
 from .config import Config
 from .extensions import db
+
+logger = logging.getLogger(__name__)
+
 
 def create_app():
     app = Flask(__name__)
@@ -17,6 +23,7 @@ def create_app():
     from .api.admin        import bp as admin_bp
     from .api.users        import bp as users_bp
     from .api.barbershop   import bp as barbershop_bp
+    from .api.clients      import bp as clients_bp
 
     app.register_blueprint(appts_bp,      url_prefix="/api/v1/appointments")
     app.register_blueprint(dashboard_bp,  url_prefix="/api/v1/barber")
@@ -25,12 +32,27 @@ def create_app():
     app.register_blueprint(admin_bp,      url_prefix="/api/v1/admin")
     app.register_blueprint(users_bp,      url_prefix="/api/v1/users")
     app.register_blueprint(barbershop_bp, url_prefix="/api/v1/barbershop")
+    app.register_blueprint(clients_bp,    url_prefix="/api/v1/clients")
 
-    # Create new tables (shops, services) and add missing columns to existing ones
+    # ── Global JSON error handlers ──────────────────────────────────────────
+    @app.errorhandler(404)
+    def not_found(e):
+        return jsonify({"error": "Recurso no encontrado"}), 404
+
+    @app.errorhandler(405)
+    def method_not_allowed(e):
+        return jsonify({"error": "Método no permitido"}), 405
+
+    @app.errorhandler(500)
+    def internal_error(e):
+        return jsonify({"error": "Internal server error"}), 500
+
+    # ── DB init + migraciones ───────────────────────────────────────────────
     with app.app_context():
         from . import models  # noqa: register ORM classes
         db.create_all()
         _run_migrations()
+        _auto_generate_slots()
 
     @app.get("/health")
     def health():
@@ -46,15 +68,17 @@ def create_app():
         today = datetime.now(ART).date()
         total = 0
 
-        # Fetch all active barbers dynamically
         rows = db.session.execute(text(
             "SELECT id FROM barbers WHERE is_active = TRUE"
         )).fetchall()
         barber_ids = [str(r[0]) for r in rows]
 
         for bid in barber_ids:
-            for day_offset in range(7):
+            for day_offset in range(14):
                 target_date = today + timedelta(days=day_offset)
+                # Skip Sundays
+                if target_date.weekday() == 6:
+                    continue
                 current_hour, current_min = 9, 0
 
                 while True:
@@ -77,13 +101,66 @@ def create_app():
                     if current_min >= 60:
                         current_min -= 60
                         current_hour += 1
-                    if current_hour >= 18:
+                    if current_hour >= 20:
                         break
 
         db.session.commit()
         return {"status": "ok", "barbers": len(barber_ids), "slots_generados": total}
 
     return app
+
+
+def _auto_generate_slots():
+    """Genera slots para los próximos 14 días al arrancar la app (idempotente)."""
+    from sqlalchemy import text
+    from datetime import datetime, timezone, timedelta
+    import pytz
+
+    try:
+        ART   = pytz.timezone("America/Argentina/Buenos_Aires")
+        today = datetime.now(ART).date()
+
+        rows = db.session.execute(text(
+            "SELECT id FROM barbers WHERE is_active = TRUE"
+        )).fetchall()
+        barber_ids = [str(r[0]) for r in rows]
+
+        total = 0
+        for bid in barber_ids:
+            for day_offset in range(14):
+                target_date = today + timedelta(days=day_offset)
+                if target_date.weekday() == 6:  # Skip Sunday
+                    continue
+                current_hour, current_min = 9, 0
+
+                while True:
+                    local_dt = ART.localize(datetime(
+                        target_date.year, target_date.month, target_date.day,
+                        current_hour, current_min
+                    ))
+                    utc_dt = local_dt.astimezone(timezone.utc)
+
+                    db.session.execute(text("""
+                        INSERT INTO appointments
+                            (barber_id, appointment_time, status, service_name, price)
+                        VALUES
+                            (:bid, :appt_time, 'available', 'Corte', 15000)
+                        ON CONFLICT (barber_id, appointment_time) DO NOTHING
+                    """), {"bid": bid, "appt_time": utc_dt})
+
+                    total += 1
+                    current_min += 30
+                    if current_min >= 60:
+                        current_min -= 60
+                        current_hour += 1
+                    if current_hour >= 20:
+                        break
+
+        db.session.commit()
+        logger.info("[slots] Auto-generados para %d barberos (%d slots)", len(barber_ids), total)
+    except Exception as exc:
+        db.session.rollback()
+        logger.error("[slots] Error auto-generando slots: %s", exc)
 
 
 def _run_migrations():
@@ -113,6 +190,9 @@ def _run_migrations():
         "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS absence_charge_amount INTEGER DEFAULT 0",
         "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS terms_accepted_at     TIMESTAMPTZ",
         "ALTER TABLE barbers      ADD COLUMN IF NOT EXISTS password_hash         VARCHAR(256)",
+        # ── QR verification ────────────────────────────────────────────────────
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS verified_at  TIMESTAMPTZ",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS verified_by  VARCHAR(36)",
         # ── users table ────────────────────────────────────────────────────────
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -123,6 +203,7 @@ def _run_migrations():
             created_at TIMESTAMP DEFAULT NOW()
         )
         """,
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(256)",
         "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)",
         # Unique indexes (IF NOT EXISTS para idempotencia)
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_appt_qr_token      ON appointments (qr_token)      WHERE qr_token IS NOT NULL",

@@ -13,6 +13,21 @@ bp  = Blueprint("appointments", __name__)
 ART = pytz.timezone("America/Argentina/Buenos_Aires")
 
 
+def _get_barber_id_from_request():
+    """Extrae barber_id del Bearer token del barbero. Retorna None si inválido."""
+    from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+    auth  = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    try:
+        s    = URLSafeTimedSerializer(current_app.config["SECRET_KEY"])
+        data = s.loads(token, salt="barber-v1", max_age=86_400 * 30)
+        return data.get("barber_id")
+    except (BadSignature, SignatureExpired):
+        return None
+
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def _cancel_window():
@@ -313,12 +328,14 @@ def _book_appointment_inner():
         if shop_row and shop_row["whatsapp"]:
             from app.services.notifications import notify_barbershop
             notify_barbershop(
-                to_number   = shop_row["whatsapp"],
-                client_name = user.name,
-                barber_name = barber_row["name"] if barber_row else "",
-                shop_name   = shop_row["name"] or "",
-                fecha       = local_t.strftime("%d/%m/%Y"),
-                hora        = local_t.strftime("%H:%M"),
+                to_number        = shop_row["whatsapp"],
+                client_name      = user.name,
+                whatsapp_cliente = user.whatsapp or "",
+                barber_name      = barber_row["name"] if barber_row else "",
+                shop_name        = shop_row["name"] or "",
+                servicio         = updated["service_name"] or "",
+                fecha            = local_t.strftime("%d/%m/%Y"),
+                hora             = local_t.strftime("%H:%M"),
             )
     except Exception as _notify_err:
         import logging
@@ -826,3 +843,92 @@ def get_day():
             "booked":    sum(1 for s in slots if s["status"] in ("booked", "rescheduled")),
         },
     })
+
+
+# ── GET /verify/<qr_token> — barbero lee QR ───────────────────────────────────
+
+@bp.get("/verify/<qr_token>")
+def verify_get(qr_token):
+    """Barbero escanea QR: devuelve datos del turno. Requiere JWT de barbero."""
+    barber_id = _get_barber_id_from_request()
+    if not barber_id:
+        return jsonify({"error": "No autorizado"}), 401
+
+    row = db.session.execute(text("""
+        SELECT
+            a.id::text,
+            a.appointment_time,
+            a.status,
+            a.service_name,
+            a.price,
+            a.booking_code,
+            a.verified_at,
+            b.name AS barber_name,
+            COALESCE(u.name,      c.full_name) AS client_name,
+            COALESCE(a.whatsapp_number, c.whatsapp) AS client_wa
+        FROM appointments a
+        JOIN barbers b ON b.id = a.barber_id
+        LEFT JOIN clients c ON c.id = a.client_id
+        LEFT JOIN users   u ON u.id = a.user_id
+        WHERE a.qr_token = :token
+    """), {"token": qr_token}).mappings().first()
+
+    if not row:
+        return jsonify({"error": "Token inválido"}), 404
+
+    if row["verified_at"]:
+        return jsonify({"error": "Este turno ya fue verificado"}), 409
+
+    if row["status"] not in ("booked", "rescheduled"):
+        return jsonify({"error": f"El turno no está en estado reservado (estado: {row['status']})"}), 409
+
+    appt_utc = row["appointment_time"]
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    local_t = appt_utc.astimezone(ART)
+
+    return jsonify({
+        "id":           row["id"],
+        "booking_code": row["booking_code"],
+        "barber_name":  row["barber_name"],
+        "client_name":  row["client_name"],
+        "client_wa":    row["client_wa"],
+        "service_name": row["service_name"],
+        "price":        float(row["price"]) if row["price"] else 0,
+        "fecha":        local_t.strftime("%d/%m/%Y"),
+        "hora":         local_t.strftime("%H:%M"),
+        "status":       row["status"],
+    })
+
+
+# ── POST /verify/<qr_token> — confirmar presencia ─────────────────────────────
+
+@bp.post("/verify/<qr_token>")
+def verify_post(qr_token):
+    """Barbero confirma presencia escaneando QR. Requiere JWT de barbero."""
+    barber_id = _get_barber_id_from_request()
+    if not barber_id:
+        return jsonify({"error": "No autorizado"}), 401
+
+    row = db.session.execute(
+        text("SELECT id, status, verified_at FROM appointments WHERE qr_token = :token"),
+        {"token": qr_token}
+    ).mappings().first()
+
+    if not row:
+        return jsonify({"error": "Token inválido"}), 404
+
+    if row["verified_at"]:
+        return jsonify({"error": "Este turno ya fue verificado"}), 409
+
+    if row["status"] not in ("booked", "rescheduled"):
+        return jsonify({"error": f"No se puede verificar (estado: {row['status']})"}), 400
+
+    db.session.execute(text("""
+        UPDATE appointments
+        SET status = 'completed', verified_at = NOW(), verified_by = :bid
+        WHERE id = :id
+    """), {"bid": str(barber_id), "id": row["id"]})
+    db.session.commit()
+
+    return jsonify({"ok": True, "message": "Presencia confirmada"})
