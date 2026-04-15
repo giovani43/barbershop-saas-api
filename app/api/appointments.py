@@ -399,6 +399,75 @@ def get_qr(appointment_id):
     return send_file(buf, mimetype="image/png")
 
 
+# ── GET /available-soon — próximos slots libres de la barbería ───────────────
+
+@bp.get("/available-soon")
+def available_soon():
+    """Retorna los N próximos slots disponibles de todos los barberos de un shop."""
+    shop_slug = request.args.get("shop_slug", "").strip()
+    limit     = min(int(request.args.get("limit", 8)), 20)
+
+    if not shop_slug:
+        return jsonify({"error": "Falta shop_slug"}), 400
+
+    now_utc     = datetime.now(timezone.utc)
+    today_ar    = now_utc.astimezone(ART).date()
+    tomorrow_ar = today_ar + timedelta(days=1)
+    days_es     = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+
+    try:
+        rows = db.session.execute(text("""
+            SELECT
+                a.id::text,
+                a.appointment_time,
+                b.id::text  AS barber_id,
+                b.name      AS barber_name
+            FROM appointments a
+            JOIN barbers b ON b.id = a.barber_id
+            JOIN shops   s ON s.id = b.shop_id
+            WHERE s.slug    = :slug
+              AND a.status  = 'available'
+              AND a.appointment_time > :now
+              AND NOT EXISTS (
+                  SELECT 1 FROM blocked_slots bs
+                  WHERE bs.barber_id    = b.id
+                    AND bs.blocked_date = (a.appointment_time AT TIME ZONE 'America/Argentina/Buenos_Aires')::date
+                    AND (bs.all_day = TRUE OR bs.blocked_time = (a.appointment_time AT TIME ZONE 'America/Argentina/Buenos_Aires')::time)
+              )
+            ORDER BY a.appointment_time ASC
+            LIMIT :limit
+        """), {"slug": shop_slug, "now": now_utc, "limit": limit}).mappings().all()
+    except Exception:
+        db.session.rollback()
+        return jsonify({"slots": []})
+
+    slots = []
+    for r in rows:
+        appt_utc = r["appointment_time"]
+        if appt_utc.tzinfo is None:
+            appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+        local_t    = appt_utc.astimezone(ART)
+        local_date = local_t.date()
+
+        if local_date == today_ar:
+            date_label = "Hoy"
+        elif local_date == tomorrow_ar:
+            date_label = "Mañana"
+        else:
+            date_label = f"{days_es[local_date.weekday()]} {local_date.strftime('%d/%m')}"
+
+        slots.append({
+            "id":          r["id"],
+            "time":        local_t.strftime("%H:%M"),
+            "date_iso":    local_date.isoformat(),
+            "date_label":  date_label,
+            "barber_id":   r["barber_id"],
+            "barber_name": r["barber_name"],
+        })
+
+    return jsonify({"slots": slots})
+
+
 # ── GET /<id> — detalle público del turno ────────────────────────────────────
 
 @bp.get("/<appointment_id>")
