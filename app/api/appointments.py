@@ -28,6 +28,21 @@ def _get_barber_id_from_request():
         return None
 
 
+def _get_user_id_from_client_token():
+    """Extrae user_id del Bearer token del cliente (salt client-v1). Retorna None si inválido."""
+    from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+    auth  = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    try:
+        s    = URLSafeTimedSerializer(current_app.config["SECRET_KEY"])
+        data = s.loads(token, salt="client-v1", max_age=86_400 * 30)
+        return data.get("user_id")
+    except (BadSignature, SignatureExpired):
+        return None
+
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def _cancel_window():
@@ -466,6 +481,64 @@ def available_soon():
         })
 
     return jsonify({"slots": slots})
+
+
+# ── GET /my — historial completo del cliente autenticado ─────────────────────
+
+@bp.get("/my")
+def my_appointments():
+    """Devuelve TODOS los turnos del cliente autenticado (sin filtro de estado), más recientes primero."""
+    user_id = _get_user_id_from_client_token()
+    if not user_id:
+        return jsonify({"error": "No autorizado"}), 401
+
+    from app.models import User
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({"error": "Usuario no encontrado"}), 404
+
+    rows = db.session.execute(text("""
+        SELECT
+            a.id::text,
+            a.appointment_time,
+            a.status,
+            a.service_name,
+            a.price,
+            a.booking_code,
+            a.qr_token,
+            a.rescheduled_count,
+            b.name AS barber_name
+        FROM appointments a
+        JOIN barbers b ON b.id = a.barber_id
+        WHERE a.status != 'available'
+          AND (
+              a.user_id = :uid
+              OR a.client_id IN (SELECT id FROM clients WHERE dni = :dni)
+          )
+        ORDER BY a.appointment_time DESC
+    """), {"uid": user_id, "dni": user.dni}).mappings().all()
+
+    result = []
+    for r in rows:
+        appt_utc = r["appointment_time"]
+        if appt_utc.tzinfo is None:
+            appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+        local_t = appt_utc.astimezone(ART)
+        result.append({
+            "id":               r["id"],
+            "booking_code":     r["booking_code"],
+            "qr_token":         r["qr_token"],
+            "barber_name":      r["barber_name"],
+            "service_name":     r["service_name"],
+            "price":            float(r["price"]) if r["price"] else 0,
+            "date":             local_t.strftime("%d/%m/%Y"),
+            "time":             local_t.strftime("%H:%M"),
+            "datetime_iso":     local_t.isoformat(),
+            "status":           r["status"],
+            "rescheduled_count": r["rescheduled_count"] or 0,
+        })
+
+    return jsonify({"appointments": result})
 
 
 # ── GET /<id> — detalle público del turno ────────────────────────────────────
