@@ -4,6 +4,13 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def formatear_telefono(tel: str) -> str:
+    tel = tel.strip().replace(" ", "").replace("-", "")
+    if not tel.startswith("+"):
+        tel = "+54" + tel
+    return "whatsapp:" + tel
+
+
 def notify_barbershop(
     to_number: str,
     client_name: str,
@@ -27,12 +34,10 @@ def notify_barbershop(
         print("[TWILIO] ADVERTENCIA: TWILIO_ACCOUNT_SID o TWILIO_AUTH_TOKEN no están seteados")
         return
 
-    # Normalizar número: solo dígitos, prefijo whatsapp:+
-    digits = "".join(c for c in to_number if c.isdigit())
-    if not digits:
+    if not to_number or not to_number.strip():
         logger.warning("[TWILIO] Número de WhatsApp inválido: %s", to_number)
         return
-    wa_to = f"whatsapp:+{digits}"
+    wa_to = formatear_telefono(to_number)
 
     body = (
         f"Nuevo turno en {shop_name}\n"
