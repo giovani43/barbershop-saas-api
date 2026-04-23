@@ -796,6 +796,21 @@ def cancel_appointment(appointment_id):
             ),
         }), 403
 
+    # Capturar datos para notificaciones antes de liberar el slot
+    _cancel_client = db.session.execute(
+        text("SELECT full_name, whatsapp FROM clients WHERE id = :cid"),
+        {"cid": str(appt["client_id"])}
+    ).mappings().first()
+    _cancel_shop = db.session.execute(text("""
+        SELECT b.name AS barber_name, s.whatsapp AS shop_wa, s.name AS shop_name
+        FROM barbers b JOIN shops s ON s.id = b.shop_id WHERE b.id = :bid
+    """), {"bid": str(appt["barber_id"])}).mappings().first()
+
+    appt_utc_c = appt["appointment_time"]
+    if appt_utc_c.tzinfo is None:
+        appt_utc_c = appt_utc_c.replace(tzinfo=timezone.utc)
+    local_c = appt_utc_c.astimezone(ART)
+
     # Liberar el slot: vuelve a 'available' (sin recrear fila)
     db.session.execute(text("""
         UPDATE appointments
@@ -811,6 +826,33 @@ def cancel_appointment(appointment_id):
     """), {"id": appointment_id})
 
     db.session.commit()
+
+    # ── Notificaciones cancelación (no bloquean) ──────────────────────────────
+    try:
+        from app.services.notifications import notify_cancel_barbershop, notify_cancel_cliente
+        if _cancel_shop and _cancel_shop["shop_wa"]:
+            notify_cancel_barbershop(
+                to_number        = _cancel_shop["shop_wa"],
+                client_name      = _cancel_client["full_name"] if _cancel_client else "",
+                whatsapp_cliente = _cancel_client["whatsapp"]  if _cancel_client else "",
+                barber_name      = _cancel_shop["barber_name"] or "",
+                shop_name        = _cancel_shop["shop_name"]   or "",
+                servicio         = appt["service_name"] or "",
+                fecha            = local_c.strftime("%d/%m/%Y"),
+                hora             = local_c.strftime("%H:%M"),
+            )
+        if _cancel_client and _cancel_client["whatsapp"]:
+            notify_cancel_cliente(
+                to_number   = _cancel_client["whatsapp"],
+                barber_name = _cancel_shop["barber_name"] if _cancel_shop else "",
+                shop_name   = _cancel_shop["shop_name"]   if _cancel_shop else "",
+                servicio    = appt["service_name"] or "",
+                fecha       = local_c.strftime("%d/%m/%Y"),
+                hora        = local_c.strftime("%H:%M"),
+            )
+    except Exception as _ne:
+        import logging as _l; _l.getLogger(__name__).error("Cancel notify error: %s", _ne)
+
     return jsonify({"message": "Turno cancelado. El slot quedó libre."}), 200
 
 
@@ -915,7 +957,7 @@ def reschedule_appointment(appointment_id):
     # Devolver detalle del nuevo slot
     updated = db.session.execute(text("""
         SELECT a.appointment_time, a.service_name, a.price, b.name AS barber_name,
-               a.booking_code, a.qr_token
+               a.booking_code, a.qr_token, b.id::text AS barber_id
         FROM appointments a JOIN barbers b ON b.id = a.barber_id
         WHERE a.id = :id
     """), {"id": new_slot_id}).mappings().first()
@@ -924,6 +966,42 @@ def reschedule_appointment(appointment_id):
     if appt_utc.tzinfo is None:
         appt_utc = appt_utc.replace(tzinfo=timezone.utc)
     local_t = appt_utc.astimezone(ART)
+
+    # ── Notificaciones reprogramación (no bloquean) ───────────────────────────
+    try:
+        from app.services.notifications import notify_reschedule_barbershop, notify_reschedule_cliente
+        _resched_client = db.session.execute(
+            text("SELECT full_name, whatsapp FROM clients WHERE id = :cid"),
+            {"cid": str(appt["client_id"])}
+        ).mappings().first()
+        _resched_shop = db.session.execute(text("""
+            SELECT s.whatsapp AS shop_wa, s.name AS shop_name
+            FROM barbers b JOIN shops s ON s.id = b.shop_id WHERE b.id = :bid
+        """), {"bid": updated["barber_id"]}).mappings().first()
+
+        if _resched_shop and _resched_shop["shop_wa"]:
+            notify_reschedule_barbershop(
+                to_number        = _resched_shop["shop_wa"],
+                client_name      = _resched_client["full_name"] if _resched_client else "",
+                whatsapp_cliente = _resched_client["whatsapp"]  if _resched_client else "",
+                barber_name      = updated["barber_name"] or "",
+                shop_name        = _resched_shop["shop_name"] or "",
+                servicio         = updated["service_name"] or "",
+                fecha            = local_t.strftime("%d/%m/%Y"),
+                hora             = local_t.strftime("%H:%M"),
+            )
+        if _resched_client and _resched_client["whatsapp"]:
+            notify_reschedule_cliente(
+                to_number   = _resched_client["whatsapp"],
+                barber_name = updated["barber_name"] or "",
+                shop_name   = _resched_shop["shop_name"] if _resched_shop else "",
+                servicio    = updated["service_name"] or "",
+                fecha       = local_t.strftime("%d/%m/%Y"),
+                hora        = local_t.strftime("%H:%M"),
+                booking_code = updated["booking_code"] or "",
+            )
+    except Exception as _ne:
+        import logging as _l; _l.getLogger(__name__).error("Reschedule notify error: %s", _ne)
 
     return jsonify({
         "message": "Turno reprogramado exitosamente.",

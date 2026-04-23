@@ -11,6 +11,111 @@ def formatear_telefono(tel: str) -> str:
     return "whatsapp:" + tel
 
 
+def _twilio_send(to_number: str, body: str, label: str) -> None:
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+    auth_token  = os.environ.get("TWILIO_AUTH_TOKEN")
+    from_wa     = os.environ.get("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+    if not account_sid or not auth_token:
+        logger.warning("[TWILIO %s] No configurado — omitiendo", label)
+        return
+    if not to_number or not to_number.strip():
+        logger.info("[TWILIO %s] Número vacío — omitiendo", label)
+        return
+    wa_to = formatear_telefono(to_number)
+    logger.info("[TWILIO %s] Enviando a %s", label, wa_to)
+    print(f"[TWILIO {label}] Enviando a {wa_to}")
+    try:
+        from twilio.rest import Client
+        msg = Client(account_sid, auth_token).messages.create(
+            body=body, from_=from_wa, to=wa_to
+        )
+        logger.info("[TWILIO %s] OK, SID=%s", label, msg.sid)
+        print(f"[TWILIO {label}] OK, SID={msg.sid}")
+    except Exception as exc:
+        logger.error("[TWILIO ERROR %s] %s", label, exc)
+        print(f"[TWILIO ERROR {label}] {exc}")
+
+
+def notify_cancel_barbershop(
+    to_number: str,
+    client_name: str,
+    whatsapp_cliente: str,
+    barber_name: str,
+    shop_name: str,
+    servicio: str,
+    fecha: str,
+    hora: str,
+) -> None:
+    body = (
+        f"❌ Turno cancelado\n"
+        f"Cliente: {client_name}\n"
+        f"WhatsApp: {whatsapp_cliente}\n"
+        f"Servicio: {servicio}\n"
+        f"Día: {fecha}\n"
+        f"Hora: {hora}"
+    )
+    _twilio_send(to_number, body, "cancel-barbershop")
+
+
+def notify_cancel_cliente(
+    to_number: str,
+    barber_name: str,
+    shop_name: str,
+    servicio: str,
+    fecha: str,
+    hora: str,
+) -> None:
+    body = (
+        f"❌ Tu turno en {shop_name} fue cancelado.\n"
+        f"Barbero: {barber_name}\n"
+        f"Servicio: {servicio}\n"
+        f"Día: {fecha}\n"
+        f"Hora: {hora}"
+    )
+    _twilio_send(to_number, body, "cancel-cliente")
+
+
+def notify_reschedule_barbershop(
+    to_number: str,
+    client_name: str,
+    whatsapp_cliente: str,
+    barber_name: str,
+    shop_name: str,
+    servicio: str,
+    fecha: str,
+    hora: str,
+) -> None:
+    body = (
+        f"🔄 Turno reprogramado\n"
+        f"Cliente: {client_name}\n"
+        f"WhatsApp: {whatsapp_cliente}\n"
+        f"Servicio: {servicio}\n"
+        f"Nuevo día: {fecha}\n"
+        f"Nueva hora: {hora}"
+    )
+    _twilio_send(to_number, body, "reschedule-barbershop")
+
+
+def notify_reschedule_cliente(
+    to_number: str,
+    barber_name: str,
+    shop_name: str,
+    servicio: str,
+    fecha: str,
+    hora: str,
+    booking_code: str,
+) -> None:
+    body = (
+        f"🔄 Tu turno en {shop_name} fue reprogramado.\n"
+        f"Barbero: {barber_name}\n"
+        f"Servicio: {servicio}\n"
+        f"Nuevo día: {fecha}\n"
+        f"Nueva hora: {hora}\n"
+        f"Código: {booking_code}"
+    )
+    _twilio_send(to_number, body, "reschedule-cliente")
+
+
 def notify_cliente(
     to_number: str,
     barber_name: str,
