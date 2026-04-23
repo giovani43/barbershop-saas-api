@@ -360,6 +360,9 @@ def _book_appointment_inner():
     # ── Notificación WhatsApp al cliente (no bloquea) ─────────────────────────
     try:
         cliente_tel = (user.whatsapp or "").strip()
+        import logging as _log
+        _log.getLogger(__name__).info("[TWILIO] user.whatsapp = %r", cliente_tel)
+        print(f"[TWILIO] user.whatsapp = {cliente_tel!r}")
         if cliente_tel:
             from app.services.notifications import notify_cliente
             notify_cliente(
