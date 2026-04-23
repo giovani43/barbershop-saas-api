@@ -333,6 +333,7 @@ def _book_appointment_inner():
     db.session.commit()
 
     # ── Notificación WhatsApp a la barbería (no bloquea) ──────────────────────
+    shop_row = None
     try:
         shop_row = db.session.execute(text("""
             SELECT s.whatsapp AS whatsapp, s.name FROM barbers b
@@ -355,6 +356,24 @@ def _book_appointment_inner():
     except Exception as _notify_err:
         import logging
         logging.getLogger(__name__).error("Notification error: %s", _notify_err)
+
+    # ── Notificación WhatsApp al cliente (no bloquea) ─────────────────────────
+    try:
+        cliente_tel = (user.whatsapp or "").strip()
+        if cliente_tel:
+            from app.services.notifications import notify_cliente
+            notify_cliente(
+                to_number    = cliente_tel,
+                barber_name  = barber_row["name"] if barber_row else "",
+                shop_name    = shop_row["name"] if shop_row else "",
+                servicio     = updated["service_name"] or "",
+                fecha        = local_t.strftime("%d/%m/%Y"),
+                hora         = local_t.strftime("%H:%M"),
+                booking_code = booking_code,
+            )
+    except Exception as _notify_cliente_err:
+        import logging
+        logging.getLogger(__name__).error("Notification cliente error: %s", _notify_cliente_err)
 
     price_val       = float(updated["price"]) if updated["price"] else 0
     charge_pct      = current_app.config.get("ABSENCE_CHARGE_PERCENT", 30)

@@ -11,6 +11,52 @@ def formatear_telefono(tel: str) -> str:
     return "whatsapp:" + tel
 
 
+def notify_cliente(
+    to_number: str,
+    barber_name: str,
+    shop_name: str,
+    servicio: str,
+    fecha: str,
+    hora: str,
+    booking_code: str,
+) -> None:
+    if not to_number or not to_number.strip():
+        logger.info("[TWILIO] Cliente sin número — omitiendo notificación")
+        return
+
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+    auth_token  = os.environ.get("TWILIO_AUTH_TOKEN")
+    from_wa     = os.environ.get("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+
+    if not account_sid or not auth_token:
+        logger.warning("[TWILIO] No configurado — omitiendo notificación cliente")
+        return
+
+    wa_to = formatear_telefono(to_number)
+    body = (
+        f"✅ ¡Turno confirmado en {shop_name}!\n"
+        f"Barbero: {barber_name}\n"
+        f"Servicio: {servicio}\n"
+        f"Día: {fecha}\n"
+        f"Hora: {hora}\n"
+        f"Código: {booking_code}\n\n"
+        f"Guardá este código para cancelar o reprogramar."
+    )
+
+    logger.info("[TWILIO] Enviando confirmación a cliente %s", wa_to)
+    print(f"[TWILIO] Enviando confirmación cliente a {wa_to}")
+    try:
+        from twilio.rest import Client
+        message = Client(account_sid, auth_token).messages.create(
+            body=body, from_=from_wa, to=wa_to
+        )
+        print(f"[TWILIO] Confirmación cliente OK, SID={message.sid}")
+        logger.info("[TWILIO] Confirmación cliente enviada a %s, SID=%s", wa_to, message.sid)
+    except Exception as exc:
+        print(f"[TWILIO ERROR cliente] {str(exc)}")
+        logger.error("[TWILIO ERROR cliente] %s", exc)
+
+
 def notify_barbershop(
     to_number: str,
     client_name: str,
@@ -49,6 +95,7 @@ def notify_barbershop(
         f"Hora: {hora}"
     )
 
+    logger.info("[TWILIO] Número destino formateado: %s", wa_to)
     print(f"[TWILIO] Enviando a {wa_to}")
     try:
         from twilio.rest import Client
