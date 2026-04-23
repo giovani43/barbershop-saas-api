@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 def formatear_telefono(tel: str) -> str:
     tel = tel.strip().replace(" ", "").replace("-", "")
     if not tel.startswith("+"):
-        tel = "+54" + tel
+        tel = "+549" + tel
     return "whatsapp:" + tel
 
 
