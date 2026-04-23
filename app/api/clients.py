@@ -2,7 +2,7 @@
 Blueprint /api/v1/clients — autenticación de clientes (registro + login + me + turnos).
 Usa el modelo User existente (tabla users); solo agrega password_hash.
 """
-from datetime import timezone
+from datetime import datetime, timezone
 from functools import wraps
 
 import pytz
@@ -142,6 +142,8 @@ def appointments(user):
             a.qr_token,
             a.cancelled_at,
             a.verified_at,
+            a.rescheduled_count,
+            b.id::text AS barber_id,
             b.name AS barber_nombre
         FROM appointments a
         JOIN barbers b ON b.id = a.barber_id
@@ -171,19 +173,26 @@ def appointments(user):
         if r["status"] == "available":
             continue
 
+        minutes_left  = (appt_utc - datetime.now(timezone.utc)).total_seconds() / 60
+        can_cancel    = minutes_left > 90
+        can_reschedule = can_cancel and (r["rescheduled_count"] or 0) < 1
+
         result.append({
-            "id":            r["id"],
-            "booking_code":  r["booking_code"],
-            "qr_token":      r["qr_token"],
-            "barber_nombre": r["barber_nombre"],
-            "servicio":      r["service_name"],
-            "precio":        float(r["price"]) if r["price"] else 0,
-            "fecha":         local_t.strftime("%d/%m/%Y"),
-            "hora":          local_t.strftime("%H:%M"),
-            "estado":        STATUS_MAP.get(r["status"], r["status"]),
-            "estado_raw":    r["status"],
-            "cancelled_at":  r["cancelled_at"].isoformat() if r["cancelled_at"] else None,
-            "verified_at":   r["verified_at"].isoformat()  if r["verified_at"]  else None,
+            "id":              r["id"],
+            "booking_code":    r["booking_code"],
+            "qr_token":        r["qr_token"],
+            "barber_id":       r["barber_id"],
+            "barber_nombre":   r["barber_nombre"],
+            "servicio":        r["service_name"],
+            "precio":          float(r["price"]) if r["price"] else 0,
+            "fecha":           local_t.strftime("%d/%m/%Y"),
+            "hora":            local_t.strftime("%H:%M"),
+            "estado":          STATUS_MAP.get(r["status"], r["status"]),
+            "estado_raw":      r["status"],
+            "can_cancel":      can_cancel,
+            "can_reschedule":  can_reschedule,
+            "cancelled_at":    r["cancelled_at"].isoformat() if r["cancelled_at"] else None,
+            "verified_at":     r["verified_at"].isoformat()  if r["verified_at"]  else None,
         })
 
     return jsonify({"turnos": result})
