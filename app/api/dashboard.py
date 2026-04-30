@@ -312,10 +312,7 @@ def export_excel(barber):
     ws = wb.active
     ws.title = "Turnos"
 
-    headers = [
-        "Fecha", "Hora", "Estado", "Cliente", "DNI", "WhatsApp",
-        "Servicio", "Precio", "Código", "Penalidad enviada", "Monto penalidad", "Verificado",
-    ]
+    headers = ["Hora", "Nombre cliente", "DNI", "Teléfono", "Servicio", "Precio", "Estado", "Pago"]
     ws.append(headers)
 
     STATUS_LABELS = {
@@ -332,26 +329,18 @@ def export_excel(barber):
             appt_utc = appt_utc.replace(tzinfo=timezone.utc)
         local_t = appt_utc.astimezone(ART)
 
-        verified_at = ""
-        if r["verified_at"]:
-            v = r["verified_at"]
-            if v.tzinfo is None:
-                v = v.replace(tzinfo=timezone.utc)
-            verified_at = v.astimezone(ART).strftime("%d/%m/%Y %H:%M")
+        charge_amount = int(r["absence_charge_amount"] or 0)
+        pago = f"${charge_amount:,}" if charge_amount else "—"
 
         ws.append([
-            local_t.strftime("%d/%m/%Y"),
             local_t.strftime("%H:%M"),
-            STATUS_LABELS.get(r["status"], r["status"]),
-            r["client_name"] or "",
-            r["client_dni"]  or "",
-            r["client_wa"]   or "",
+            r["client_name"]  or "",
+            r["client_dni"]   or "",
+            r["client_wa"]    or "",
             r["service_name"] or "",
             float(r["price"]) if r["price"] else 0,
-            r["booking_code"] or "",
-            "Sí" if r["absence_charge_sent"] else "No",
-            int(r["absence_charge_amount"] or 0),
-            verified_at,
+            STATUS_LABELS.get(r["status"], r["status"]),
+            pago,
         ])
 
     # Auto-width columns
