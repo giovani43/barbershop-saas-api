@@ -754,62 +754,6 @@ def complete_by_token(qr_token):
     return jsonify({"ok": True, "message": "Turno marcado como completado"})
 
 
-# ── POST /verify/<qr_token> — alias: verificar QR y marcar como presente ─────
-
-@bp.post("/verify/<qr_token>")
-def verify_by_token(qr_token):
-    """Verifica el QR, marca el turno como completado y devuelve sus datos."""
-    row = db.session.execute(text("""
-        SELECT
-            a.id::text,
-            a.appointment_time,
-            a.status,
-            a.service_name,
-            a.price,
-            a.booking_code,
-            a.rescheduled_count,
-            b.name      AS barber_name,
-            c.full_name AS client_name,
-            c.whatsapp  AS client_wa
-        FROM appointments a
-        JOIN barbers b ON b.id = a.barber_id
-        LEFT JOIN clients c ON c.id = a.client_id
-        WHERE a.qr_token = :token
-    """), {"token": qr_token}).mappings().first()
-
-    if not row:
-        return jsonify({"error": "QR inválido"}), 404
-
-    if row["status"] not in ("booked", "rescheduled"):
-        return jsonify({"error": f"El turno no se puede completar (estado: {row['status']})"}), 400
-
-    db.session.execute(
-        text("UPDATE appointments SET status = 'completed', verified_at = NOW(), qr_token = NULL WHERE id = :id"),
-        {"id": row["id"]}
-    )
-    db.session.commit()
-
-    appt_utc = row["appointment_time"]
-    if appt_utc.tzinfo is None:
-        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
-    local_t = appt_utc.astimezone(ART)
-
-    return jsonify({
-        "ok":               True,
-        "id":               row["id"],
-        "booking_code":     row["booking_code"],
-        "barber_name":      row["barber_name"],
-        "client_name":      row["client_name"],
-        "client_wa":        row["client_wa"],
-        "service_name":     row["service_name"],
-        "price":            float(row["price"]) if row["price"] else 0,
-        "date":             local_t.strftime("%d/%m/%Y"),
-        "time":             local_t.strftime("%H:%M"),
-        "status":           "completed",
-        "rescheduled_count": row["rescheduled_count"] or 0,
-    })
-
-
 # ── POST /<id>/cancel ─────────────────────────────────────────────────────────
 
 @bp.post("/<appointment_id>/cancel")
@@ -1208,10 +1152,25 @@ def verify_post(qr_token):
     if not barber_id:
         return jsonify({"error": "No autorizado"}), 401
 
-    row = db.session.execute(
-        text("SELECT id, status, verified_at FROM appointments WHERE qr_token = :token"),
-        {"token": qr_token}
-    ).mappings().first()
+    row = db.session.execute(text("""
+        SELECT
+            a.id::text,
+            a.appointment_time,
+            a.status,
+            a.service_name,
+            a.price,
+            a.booking_code,
+            a.rescheduled_count,
+            a.verified_at,
+            b.name      AS barber_name,
+            COALESCE(u.name,      c.full_name) AS client_name,
+            COALESCE(a.whatsapp_number, c.whatsapp) AS client_wa
+        FROM appointments a
+        JOIN barbers b ON b.id = a.barber_id
+        LEFT JOIN clients c ON c.id = a.client_id
+        LEFT JOIN users   u ON u.id = a.user_id
+        WHERE a.qr_token = :token
+    """), {"token": qr_token}).mappings().first()
 
     if not row:
         return jsonify({"error": "Token inválido"}), 404
@@ -1229,4 +1188,22 @@ def verify_post(qr_token):
     """), {"bid": str(barber_id), "id": row["id"]})
     db.session.commit()
 
-    return jsonify({"ok": True, "message": "Presencia confirmada"})
+    appt_utc = row["appointment_time"]
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    local_t = appt_utc.astimezone(ART)
+
+    return jsonify({
+        "ok":               True,
+        "id":               row["id"],
+        "booking_code":     row["booking_code"],
+        "barber_name":      row["barber_name"],
+        "client_name":      row["client_name"],
+        "client_wa":        row["client_wa"],
+        "service_name":     row["service_name"],
+        "price":            float(row["price"]) if row["price"] else 0,
+        "date":             local_t.strftime("%d/%m/%Y"),
+        "time":             local_t.strftime("%H:%M"),
+        "status":           "completed",
+        "rescheduled_count": row["rescheduled_count"] or 0,
+    })
