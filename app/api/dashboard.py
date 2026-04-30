@@ -216,7 +216,7 @@ def delete_blocked_slot(barber, slot_id):
         return jsonify({"error": "Bloqueo no encontrado"}), 404
 
     db.session.commit()
-    return jsonify({"ok": True})
+    return jsonify({"success": True})
 
 
 # ── Cobrar ausencia ───────────────────────────────────────────────────────────
