@@ -58,8 +58,11 @@ def seed():
         shop = Shop(
             slug                = SLUG,
             name                = "MVZ Barberia",
-            address             = "Humboldt 689, CABA, Buenos Aires",
-            whatsapp            = "+5491164206213",
+            address             = "Humboldt 689, CABA",
+            whatsapp            = "+5491133223802",
+            lat                 = -34.5997,
+            lng                 = -58.4369,
+            hours               = "Lun-Sáb 09:00-20:00",
             plan                = "shop",
             flash_promo_active  = False,
             admin_password_hash = generate_password_hash("admin123"),
@@ -78,55 +81,60 @@ def seed():
         # ── Barbers ───────────────────────────────────────────────────────────
         barbers_data = [
             {
-                "name":      "Ezequiel",
-                "slug":      "ezequiel-nonino",
-                "specialty": "Corte & Estilo",
-                "instagram": "@ezequiel.nonino",
-                "photo_url": "/barbers/ezequiel.jpg",
-                "whatsapp":  "+5491164206213",
-            },
-            {
-                "name":      "Nico",
-                "slug":      "nico-alexander",
-                "specialty": "Corte & Barba",
-                "instagram": "@alexander_nicolasi",
-                "photo_url": "/barbers/nico.jpg",
-                "whatsapp":  "+5491164206213",
-            },
-            {
                 "name":      "Braian",
-                "slug":      "braian-resquin",
+                "slug":      "braianresquin",
+                "password":  "braian123",
                 "specialty": "Fade & Diseño",
                 "instagram": "@braianresquin_",
                 "photo_url": "/barbers/braian.jpg",
-                "whatsapp":  "+5491164206213",
+                "whatsapp":  "+5491133223802",
+            },
+            {
+                "name":      "Ezequiel",
+                "slug":      "ezequielnonino",
+                "password":  "ezequiel123",
+                "specialty": "Corte & Estilo",
+                "instagram": "@ezequiel.nonino",
+                "photo_url": "/barbers/ezequiel.jpg",
+                "whatsapp":  "+5491133223802",
+            },
+            {
+                "name":      "Nico",
+                "slug":      "nicolasalexander",
+                "password":  "nico123",
+                "specialty": "Corte & Barba",
+                "instagram": "@alexander_nicolasi",
+                "photo_url": "/barbers/nico.jpg",
+                "whatsapp":  "+5491133223802",
             },
         ]
         barber_objs = []
         for bd in barbers_data:
             existing = Barber.query.filter_by(slug=bd["slug"]).first()
             if existing:
-                existing.shop_id   = shop.id
-                existing.shop_name = "MVZ Barberia"
-                existing.shop_slug = SLUG
-                existing.specialty = bd["specialty"]
-                existing.whatsapp  = bd["whatsapp"]
-                existing.instagram = bd.get("instagram")
-                existing.photo_url = bd.get("photo_url")
-                existing.is_active = True
+                existing.shop_id       = shop.id
+                existing.shop_name     = "MVZ Barberia"
+                existing.shop_slug     = SLUG
+                existing.specialty     = bd["specialty"]
+                existing.whatsapp      = bd["whatsapp"]
+                existing.instagram     = bd.get("instagram")
+                existing.photo_url     = bd.get("photo_url")
+                existing.is_active     = True
+                existing.password_hash = generate_password_hash(bd["password"])
                 barber_objs.append(existing)
             else:
                 b = Barber(
-                    shop_id   = shop.id,
-                    name      = bd["name"],
-                    slug      = bd["slug"],
-                    shop_name = "MVZ Barberia",
-                    shop_slug = SLUG,
-                    specialty = bd["specialty"],
-                    whatsapp  = bd["whatsapp"],
-                    instagram = bd.get("instagram"),
-                    photo_url = bd.get("photo_url"),
-                    is_active = True,
+                    shop_id       = shop.id,
+                    name          = bd["name"],
+                    slug          = bd["slug"],
+                    shop_name     = "MVZ Barberia",
+                    shop_slug     = SLUG,
+                    specialty     = bd["specialty"],
+                    whatsapp      = bd["whatsapp"],
+                    instagram     = bd.get("instagram"),
+                    photo_url     = bd.get("photo_url"),
+                    is_active     = True,
+                    password_hash = generate_password_hash(bd["password"]),
                 )
                 db.session.add(b)
                 barber_objs.append(b)
@@ -167,14 +175,23 @@ def seed():
 
         db.session.commit()
 
+        print("=" * 55)
         print("OK MVZ Barberia seeded!")
         print(f"  Shop ID   : {shop.id}")
         print(f"  Barbers   : {', '.join(b.name for b in barber_objs)}")
         print(f"  Services  : Corte $15.000 · Corte+cejas+barba $20.000")
-        print(f"  Slots     : {total} (3 barberos × días Lun–Sáb × 22 slots/día)")
+        print(f"  Slots     : {total}")
         print()
         print(f"  Admin login: slug={SLUG}  |  password=admin123")
         print(f"  Client URL: /shop/{SLUG}")
+        print("=" * 55)
+
+        # ── Verify slots in DB ────────────────────────────────────────────────
+        from sqlalchemy import text
+        result = db.session.execute(
+            text("SELECT COUNT(*) FROM appointments WHERE status='available'")
+        ).scalar()
+        print(f"  Slots disponibles en DB: {result}")
 
 
 if __name__ == "__main__":

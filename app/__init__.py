@@ -90,9 +90,9 @@ def create_app():
 
                     db.session.execute(text("""
                         INSERT INTO appointments
-                            (barber_id, appointment_time, status, service_name, price)
+                            (id, barber_id, appointment_time, status, service_name, price)
                         VALUES
-                            (:bid, :appt_time, 'available', 'Corte', 15000)
+                            (gen_random_uuid(), :bid, :appt_time, 'available', 'Corte', 15000)
                         ON CONFLICT (barber_id, appointment_time) DO NOTHING
                     """), {"bid": bid, "appt_time": utc_dt})
 
@@ -142,9 +142,9 @@ def _auto_generate_slots():
 
                     db.session.execute(text("""
                         INSERT INTO appointments
-                            (barber_id, appointment_time, status, service_name, price)
+                            (id, barber_id, appointment_time, status, service_name, price)
                         VALUES
-                            (:bid, :appt_time, 'available', 'Corte', 15000)
+                            (gen_random_uuid(), :bid, :appt_time, 'available', 'Corte', 15000)
                         ON CONFLICT (barber_id, appointment_time) DO NOTHING
                     """), {"bid": bid, "appt_time": utc_dt})
 
@@ -212,7 +212,7 @@ def _run_migrations():
         """
         CREATE TABLE IF NOT EXISTS blocked_slots (
             id           SERIAL PRIMARY KEY,
-            barber_id    UUID REFERENCES barbers(id) ON DELETE CASCADE,
+            barber_id    VARCHAR(36) REFERENCES barbers(id) ON DELETE CASCADE,
             blocked_date DATE        NOT NULL,
             blocked_time TIME,
             all_day      BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -223,6 +223,10 @@ def _run_migrations():
         "CREATE INDEX IF NOT EXISTS idx_blocked_barber_date ON blocked_slots(barber_id, blocked_date)",
         # ── shops.owner_email (auto-registro multi-tenant) ─────────────────────
         "ALTER TABLE shops ADD COLUMN IF NOT EXISTS owner_email VARCHAR(200)",
+        # ── shops geo + horarios ───────────────────────────────────────────────
+        "ALTER TABLE shops ADD COLUMN IF NOT EXISTS lat   FLOAT",
+        "ALTER TABLE shops ADD COLUMN IF NOT EXISTS lng   FLOAT",
+        "ALTER TABLE shops ADD COLUMN IF NOT EXISTS hours VARCHAR(100)",
     ]
     for sql in stmts:
         try:

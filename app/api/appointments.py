@@ -1,4 +1,5 @@
 import io
+import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -8,6 +9,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
+
+logger = logging.getLogger(__name__)
 
 bp  = Blueprint("appointments", __name__)
 ART = pytz.timezone("America/Argentina/Buenos_Aires")
@@ -474,7 +477,8 @@ def available_soon():
             ORDER BY a.appointment_time ASC
             LIMIT :limit
         """), {"slug": shop_slug, "now": now_utc, "limit": limit}).mappings().all()
-    except Exception:
+    except Exception as exc:
+        logger.error("[available-soon] query error: %s", exc)
         db.session.rollback()
         return jsonify({"slots": []})
 

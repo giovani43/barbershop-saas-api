@@ -38,6 +38,9 @@ class Shop(db.Model):
     plan                = db.Column(db.String(20), default="solo")   # 'solo' | 'shop'
     flash_promo_active  = db.Column(db.Boolean, default=False)
     owner_email         = db.Column(db.String(200), nullable=True)
+    lat                 = db.Column(db.Float, nullable=True)
+    lng                 = db.Column(db.Float, nullable=True)
+    hours               = db.Column(db.String(100), nullable=True)
     admin_password_hash = db.Column(db.String(256))
     created_at          = db.Column(db.DateTime(timezone=True),
                                     default=lambda: datetime.now(timezone.utc))
