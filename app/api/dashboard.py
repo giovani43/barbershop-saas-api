@@ -1,4 +1,5 @@
 import io
+import logging
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -11,6 +12,8 @@ from werkzeug.security import check_password_hash
 
 from app.extensions import db
 from app.models import Barber
+
+logger = logging.getLogger(__name__)
 
 bp  = Blueprint("dashboard", __name__)
 ART = pytz.timezone("America/Argentina/Buenos_Aires")
@@ -102,6 +105,9 @@ def barber_day(barber):
     start_utc   = start_local.astimezone(timezone.utc)
     end_utc     = end_local.astimezone(timezone.utc)
 
+    logger.info("[barber_day] barber_id=%s date=%s start_utc=%s end_utc=%s",
+                barber.id, target, start_utc, end_utc)
+
     rows = db.session.execute(text("""
         SELECT
             a.id::text,
@@ -112,9 +118,9 @@ def barber_day(barber):
             a.booking_code,
             a.absence_charge_sent,
             a.absence_charge_amount,
-            c.full_name  AS client_name,
-            c.whatsapp   AS client_wa,
-            COALESCE(c.dni, u.dni) AS client_dni
+            COALESCE(c.full_name, u.name)           AS client_name,
+            COALESCE(c.whatsapp, a.whatsapp_number) AS client_wa,
+            COALESCE(c.dni, u.dni)                  AS client_dni
         FROM appointments a
         LEFT JOIN clients c ON c.id = a.client_id
         LEFT JOIN users   u ON u.id = a.user_id
@@ -122,6 +128,8 @@ def barber_day(barber):
           AND a.appointment_time BETWEEN :start AND :end
         ORDER BY a.appointment_time
     """), {"bid": barber.id, "start": start_utc, "end": end_utc}).mappings().all()
+
+    logger.info("[barber_day] returned %d rows: %s", len(rows), [r["status"] for r in rows])
 
     slots = []
     for r in rows:
