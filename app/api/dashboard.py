@@ -99,14 +99,7 @@ def barber_day(barber):
     else:
         target = datetime.now(ART).date()
 
-    # Rango UTC del día en ART
-    start_local = ART.localize(datetime(target.year, target.month, target.day, 0, 0, 0))
-    end_local   = ART.localize(datetime(target.year, target.month, target.day, 23, 59, 59))
-    start_utc   = start_local.astimezone(timezone.utc)
-    end_utc     = end_local.astimezone(timezone.utc)
-
-    logger.info("[barber_day] barber_id=%s date=%s start_utc=%s end_utc=%s",
-                barber.id, target, start_utc, end_utc)
+    logger.info("[barber_day] barber_id=%s date=%s", barber.id, target)
 
     rows = db.session.execute(text("""
         SELECT
@@ -125,9 +118,9 @@ def barber_day(barber):
         LEFT JOIN clients c ON c.id = a.client_id
         LEFT JOIN users   u ON u.id = a.user_id
         WHERE a.barber_id = :bid
-          AND a.appointment_time BETWEEN :start AND :end
+          AND DATE(a.appointment_time AT TIME ZONE 'America/Argentina/Buenos_Aires') = :date
         ORDER BY a.appointment_time
-    """), {"bid": barber.id, "start": start_utc, "end": end_utc}).mappings().all()
+    """), {"bid": barber.id, "date": target}).mappings().all()
 
     logger.info("[barber_day] returned %d rows: %s", len(rows), [r["status"] for r in rows])
 
