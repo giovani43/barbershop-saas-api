@@ -171,6 +171,7 @@ class Appointment(db.Model):
     terms_accepted_at     = db.Column(db.DateTime(timezone=True), nullable=True)
     verified_at           = db.Column(db.DateTime(timezone=True), nullable=True)
     verified_by           = db.Column(db.String(36), nullable=True)
+    penalty_amount        = db.Column(db.Numeric(10, 2), default=0)
 
     __table_args__ = (
         db.UniqueConstraint("barber_id", "appointment_time", name="uq_barber_time"),

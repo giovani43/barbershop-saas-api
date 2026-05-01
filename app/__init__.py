@@ -227,6 +227,8 @@ def _run_migrations():
         "ALTER TABLE shops ADD COLUMN IF NOT EXISTS lat   FLOAT",
         "ALTER TABLE shops ADD COLUMN IF NOT EXISTS lng   FLOAT",
         "ALTER TABLE shops ADD COLUMN IF NOT EXISTS hours VARCHAR(100)",
+        # ── no-show penalty ────────────────────────────────────────────────────
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS penalty_amount NUMERIC(10,2) DEFAULT 0",
     ]
     for sql in stmts:
         try:

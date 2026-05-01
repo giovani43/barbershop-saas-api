@@ -166,6 +166,40 @@ def notify_cliente(
         logger.error("[TWILIO ERROR cliente] %s", exc)
 
 
+def notify_no_show(
+    client_wa: str,
+    barber_wa: str,
+    client_name: str,
+    barber_name: str,
+    service_name: str,
+    fecha: str,
+    hora: str,
+    monto: float,
+) -> None:
+    body_cliente = (
+        f"⚠️ Ausencia registrada en MVZ Barbería\n\n"
+        f"Hola {client_name}, registramos tu ausencia al turno de hoy.\n\n"
+        f"Barbero: {barber_name}\n"
+        f"Servicio: {service_name}\n"
+        f"Día: {fecha}\n"
+        f"Hora: {hora}\n\n"
+        f"💳 Cargo por ausencia: ${monto:.0f} (30% del servicio)\n\n"
+        f"Podés abonar por MercadoPago:\n"
+        f"Alias: resquin.mvz\n\n"
+        f"Este cargo debe abonarse antes de tu próxima reserva."
+    )
+    _twilio_send(client_wa, body_cliente, "no-show-cliente")
+
+    body_barbero = (
+        f"🔴 No-show registrado\n"
+        f"Cliente: {client_name}\n"
+        f"WhatsApp: {client_wa}\n"
+        f"Turno: {fecha} {hora}\n"
+        f"Penalidad cobrada: ${monto:.0f}"
+    )
+    _twilio_send(barber_wa, body_barbero, "no-show-barbero")
+
+
 def notify_barbershop(
     to_number: str,
     client_name: str,

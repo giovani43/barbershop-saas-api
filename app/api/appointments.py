@@ -1250,3 +1250,72 @@ def verify_post(qr_token):
         "status":           "completed",
         "rescheduled_count": row["rescheduled_count"] or 0,
     })
+
+
+# ── No-show ────────────────────────────────────────────────────────────────────
+
+@bp.route("/<appt_id>/no-show", methods=["POST"])
+def mark_no_show(appt_id):
+    barber_id = _get_barber_id_from_request()
+    if not barber_id:
+        return jsonify({"error": "No autorizado"}), 401
+
+    row = db.session.execute(text("""
+        SELECT a.id, a.barber_id, a.status, a.price, a.service_name,
+               a.appointment_time, a.whatsapp_number,
+               b.name     AS barber_name,
+               b.whatsapp AS barber_wa,
+               c.full_name AS client_name,
+               c.whatsapp  AS client_wa
+        FROM appointments a
+        JOIN barbers b ON b.id = a.barber_id
+        LEFT JOIN clients c ON c.id = a.client_id
+        WHERE a.id = :id
+    """), {"id": appt_id}).mappings().first()
+
+    if not row:
+        return jsonify({"error": "Turno no encontrado"}), 404
+
+    if str(row["barber_id"]) != str(barber_id):
+        return jsonify({"error": "Este turno no te pertenece"}), 403
+
+    if row["status"] not in ("booked", "rescheduled"):
+        return jsonify({"error": f"No se puede marcar ausente (estado: {row['status']})"}), 400
+
+    price    = float(row["price"]) if row["price"] else 0
+    penalty  = round(price * 0.30, 2)
+
+    db.session.execute(text("""
+        UPDATE appointments
+        SET status = 'no_show',
+            penalty_amount = :penalty,
+            updated_at = NOW()
+        WHERE id = :id
+    """), {"penalty": penalty, "id": appt_id})
+    db.session.commit()
+
+    appt_utc = row["appointment_time"]
+    if appt_utc.tzinfo is None:
+        appt_utc = appt_utc.replace(tzinfo=timezone.utc)
+    local_t = appt_utc.astimezone(ART)
+    fecha   = local_t.strftime("%d/%m/%Y")
+    hora    = local_t.strftime("%H:%M")
+
+    try:
+        from app.services.notifications import notify_no_show
+        client_wa = row["client_wa"] or row["whatsapp_number"] or ""
+        barber_wa = row["barber_wa"] or ""
+        notify_no_show(
+            client_wa   = client_wa,
+            barber_wa   = barber_wa,
+            client_name = row["client_name"] or "Cliente",
+            barber_name = row["barber_name"] or "",
+            service_name= row["service_name"] or "",
+            fecha       = fecha,
+            hora        = hora,
+            monto       = penalty,
+        )
+    except Exception as exc:
+        logger.error("[no-show] Error enviando notificación: %s", exc)
+
+    return jsonify({"success": True, "penalty": penalty})
