@@ -229,6 +229,7 @@ def _run_migrations():
         "ALTER TABLE shops ADD COLUMN IF NOT EXISTS hours VARCHAR(100)",
         # ── no-show penalty ────────────────────────────────────────────────────
         "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS penalty_amount NUMERIC(10,2) DEFAULT 0",
+        "ALTER TABLE appointments ADD COLUMN IF NOT EXISTS penalty_paid   BOOLEAN DEFAULT FALSE",
     ]
     for sql in stmts:
         try:

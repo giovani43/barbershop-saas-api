@@ -111,6 +111,8 @@ def barber_day(barber):
             a.booking_code,
             a.absence_charge_sent,
             a.absence_charge_amount,
+            a.penalty_amount,
+            COALESCE(a.penalty_paid, FALSE)         AS penalty_paid,
             COALESCE(c.full_name, u.name)           AS client_name,
             COALESCE(c.whatsapp, a.whatsapp_number) AS client_wa,
             COALESCE(c.dni, u.dni)                  AS client_dni
@@ -139,6 +141,8 @@ def barber_day(barber):
             "booking_code":          r["booking_code"],
             "absence_charge_sent":   bool(r["absence_charge_sent"]),
             "absence_charge_amount": int(r["absence_charge_amount"] or 0),
+            "penalty_amount":        float(r["penalty_amount"] or 0),
+            "penalty_paid":          bool(r["penalty_paid"]),
             "client_name":           r["client_name"],
             "client_wa":             r["client_wa"],
             "client_dni":            r["client_dni"],
@@ -248,6 +252,32 @@ def charge_absence(barber, appt_id):
     db.session.commit()
 
     return jsonify({"ok": True, "charge": charge})
+
+
+# ── PATCH /appointments/<id>/penalty-paid ─────────────────────────────────────
+
+@bp.patch("/appointments/<appt_id>/penalty-paid")
+@barber_required
+def mark_penalty_paid(barber, appt_id):
+    row = db.session.execute(text("""
+        SELECT id, status, penalty_paid
+        FROM appointments
+        WHERE id = :id AND barber_id = :bid
+    """), {"id": appt_id, "bid": barber.id}).mappings().first()
+
+    if not row:
+        return jsonify({"error": "Turno no encontrado"}), 404
+    if row["status"] != "no_show":
+        return jsonify({"error": "El turno no está en estado ausente"}), 400
+    if row["penalty_paid"]:
+        return jsonify({"error": "La penalidad ya fue registrada como cobrada"}), 409
+
+    db.session.execute(text("""
+        UPDATE appointments SET penalty_paid = TRUE WHERE id = :id
+    """), {"id": appt_id})
+    db.session.commit()
+
+    return jsonify({"success": True})
 
 
 # ── GET /export-excel ─────────────────────────────────────────────────────────
