@@ -26,8 +26,9 @@ def get_shop(shop_slug):
                 .order_by(Service.display_order)
                 .all())
 
-    # Count available slots today per barber
-    today     = datetime.now(ART).date()
+    # Count available slots today per barber (future only)
+    now_utc   = datetime.now(timezone.utc)
+    today     = now_utc.astimezone(ART).date()
     start_utc = ART.localize(datetime(today.year, today.month, today.day, 0, 0)).astimezone(timezone.utc)
     end_utc   = ART.localize(datetime(today.year, today.month, today.day, 23, 59)).astimezone(timezone.utc)
 
@@ -41,6 +42,7 @@ def get_shop(shop_slug):
                 .filter(
                     Appointment.barber_id.in_(barber_ids),
                     Appointment.appointment_time.between(start_utc, end_utc),
+                    Appointment.appointment_time > now_utc,
                     Appointment.status == "available",
                 )
                 .group_by(Appointment.barber_id)

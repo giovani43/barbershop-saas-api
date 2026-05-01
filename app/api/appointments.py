@@ -1093,6 +1093,7 @@ def get_day():
         FROM appointments
         WHERE barber_id = :bid
           AND appointment_time BETWEEN :start AND :end
+          AND (status != 'available' OR appointment_time > NOW())
         ORDER BY appointment_time
     """), {"bid": barber_id, "start": start_utc, "end": end_utc}).mappings().all()
 
