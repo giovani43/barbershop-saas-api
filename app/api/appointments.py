@@ -95,8 +95,8 @@ def create_slots():
         utc_dt   = local_dt.astimezone(timezone.utc)
 
         db.session.execute(text("""
-            INSERT INTO appointments (barber_id, appointment_time, status, service_name, price)
-            VALUES (:barber_id, :appt_time, 'available', 'Corte + Barba', 3500)
+            INSERT INTO appointments (id, barber_id, appointment_time, status, service_name, price)
+            VALUES (gen_random_uuid(), :barber_id, :appt_time, 'available', 'Corte + Barba', 3500)
             ON CONFLICT (barber_id, appointment_time) DO NOTHING
         """), {"barber_id": barber_id, "appt_time": utc_dt})
 
@@ -140,8 +140,8 @@ def generate_week():
             utc_dt = local_dt.astimezone(timezone.utc)
 
             db.session.execute(text("""
-                INSERT INTO appointments (barber_id, appointment_time, status, service_name, price)
-                VALUES (:barber_id, :appt_time, 'available', 'Corte + Barba', 3500)
+                INSERT INTO appointments (id, barber_id, appointment_time, status, service_name, price)
+                VALUES (gen_random_uuid(), :barber_id, :appt_time, 'available', 'Corte + Barba', 3500)
                 ON CONFLICT (barber_id, appointment_time) DO NOTHING
             """), {"barber_id": barber_id, "appt_time": utc_dt})
 
@@ -255,8 +255,8 @@ def _book_appointment_inner():
 
     if not client:
         result = db.session.execute(text("""
-            INSERT INTO clients (full_name, dni, whatsapp, barber_id)
-            VALUES (:name, :dni, :wa, :bid)
+            INSERT INTO clients (id, full_name, dni, whatsapp, barber_id)
+            VALUES (gen_random_uuid(), :name, :dni, :wa, :bid)
             RETURNING id
         """), {"name": user.name, "dni": user.dni, "wa": user.whatsapp,
                "bid": str(appt["barber_id"])})
