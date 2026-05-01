@@ -7,7 +7,11 @@ logger = logging.getLogger(__name__)
 def formatear_telefono(tel: str) -> str:
     tel = tel.strip().replace(" ", "").replace("-", "")
     if not tel.startswith("+"):
+        # bare number like 1133223802 → +5491133223802
         tel = "+549" + tel
+    elif tel.startswith("+54") and not tel.startswith("+549"):
+        # +541133223802 → +5491133223802 (insert 9 after country code)
+        tel = "+549" + tel[3:]
     return "whatsapp:" + tel
 
 

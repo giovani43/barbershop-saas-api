@@ -775,10 +775,19 @@ def cancel_appointment(appointment_id):
     if not appt or appt["status"] not in ("booked", "rescheduled"):
         return jsonify({"error": "Turno no encontrado o no está reservado"}), 404
 
-    client = db.session.execute(
-        text("SELECT id FROM clients WHERE id = :cid AND dni = :dni"),
-        {"cid": str(appt["client_id"]), "dni": dni}
-    ).mappings().first()
+    client = None
+    if appt["client_id"]:
+        client = db.session.execute(
+            text("SELECT id FROM clients WHERE id = :cid AND dni = :dni"),
+            {"cid": str(appt["client_id"]), "dni": dni}
+        ).mappings().first()
+    if not client and appt["user_id"]:
+        user_check = db.session.execute(
+            text("SELECT id FROM users WHERE id = :uid AND dni = :dni"),
+            {"uid": appt["user_id"], "dni": dni}
+        ).mappings().first()
+        if user_check:
+            client = user_check
 
     if not client:
         return jsonify({"error": "El DNI no corresponde a este turno"}), 403
@@ -801,10 +810,19 @@ def cancel_appointment(appointment_id):
         }), 403
 
     # Capturar datos para notificaciones antes de liberar el slot
-    _cancel_client = db.session.execute(
-        text("SELECT full_name, whatsapp FROM clients WHERE id = :cid"),
-        {"cid": str(appt["client_id"])}
-    ).mappings().first()
+    _cancel_client = None
+    if appt["client_id"]:
+        _cancel_client = db.session.execute(
+            text("SELECT full_name, whatsapp FROM clients WHERE id = :cid"),
+            {"cid": str(appt["client_id"])}
+        ).mappings().first()
+    if not _cancel_client and appt["user_id"]:
+        _u = db.session.execute(
+            text("SELECT name AS full_name, whatsapp FROM users WHERE id = :uid"),
+            {"uid": appt["user_id"]}
+        ).mappings().first()
+        if _u:
+            _cancel_client = _u
     _cancel_shop = db.session.execute(text("""
         SELECT b.name AS barber_name, s.whatsapp AS shop_wa, s.name AS shop_name
         FROM barbers b JOIN shops s ON s.id = b.shop_id WHERE b.id = :bid
@@ -862,7 +880,7 @@ def cancel_appointment(appointment_id):
 
 # ── POST /<id>/reschedule ─────────────────────────────────────────────────────
 
-@bp.post("/<appointment_id>/reschedule")
+@bp.route("/<appointment_id>/reschedule", methods=["POST", "PATCH"])
 def reschedule_appointment(appointment_id):
     """
     Body: { dni, new_slot_id }
@@ -887,10 +905,19 @@ def reschedule_appointment(appointment_id):
         return jsonify({"error": "Turno no encontrado o no está reservado"}), 404
 
     # Verificar DNI
-    client = db.session.execute(
-        text("SELECT id FROM clients WHERE id = :cid AND dni = :dni"),
-        {"cid": str(appt["client_id"]), "dni": dni}
-    ).mappings().first()
+    client = None
+    if appt["client_id"]:
+        client = db.session.execute(
+            text("SELECT id FROM clients WHERE id = :cid AND dni = :dni"),
+            {"cid": str(appt["client_id"]), "dni": dni}
+        ).mappings().first()
+    if not client and appt["user_id"]:
+        user_check = db.session.execute(
+            text("SELECT id FROM users WHERE id = :uid AND dni = :dni"),
+            {"uid": appt["user_id"], "dni": dni}
+        ).mappings().first()
+        if user_check:
+            client = user_check
 
     if not client:
         return jsonify({"error": "El DNI no corresponde a este turno"}), 403
@@ -935,6 +962,7 @@ def reschedule_appointment(appointment_id):
         UPDATE appointments
         SET status            = 'rescheduled',
             client_id         = :client_id,
+            user_id           = :user_id,
             whatsapp_number   = :wa,
             qr_token          = :qr_token,
             booking_code      = :booking_code,
@@ -945,7 +973,8 @@ def reschedule_appointment(appointment_id):
             updated_at        = NOW()
         WHERE id = :new_id
     """), {
-        "client_id":    str(appt["client_id"]),
+        "client_id":    str(appt["client_id"]) if appt["client_id"] else None,
+        "user_id":      appt["user_id"],
         "wa":           appt["whatsapp_number"],
         "qr_token":     appt["qr_token"],
         "booking_code": appt["booking_code"],
@@ -974,10 +1003,19 @@ def reschedule_appointment(appointment_id):
     # ── Notificaciones reprogramación (no bloquean) ───────────────────────────
     try:
         from app.services.notifications import notify_reschedule_barbershop, notify_reschedule_cliente
-        _resched_client = db.session.execute(
-            text("SELECT full_name, whatsapp FROM clients WHERE id = :cid"),
-            {"cid": str(appt["client_id"])}
-        ).mappings().first()
+        _resched_client = None
+        if appt["client_id"]:
+            _resched_client = db.session.execute(
+                text("SELECT full_name, whatsapp FROM clients WHERE id = :cid"),
+                {"cid": str(appt["client_id"])}
+            ).mappings().first()
+        if not _resched_client and appt["user_id"]:
+            _u = db.session.execute(
+                text("SELECT name AS full_name, whatsapp FROM users WHERE id = :uid"),
+                {"uid": appt["user_id"]}
+            ).mappings().first()
+            if _u:
+                _resched_client = _u
         _resched_shop = db.session.execute(text("""
             SELECT s.whatsapp AS shop_wa, s.name AS shop_name
             FROM barbers b JOIN shops s ON s.id = b.shop_id WHERE b.id = :bid
