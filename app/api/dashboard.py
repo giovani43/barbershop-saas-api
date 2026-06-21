@@ -282,142 +282,128 @@ def mark_penalty_paid(barber, appt_id):
 
 # ── GET /export-excel ─────────────────────────────────────────────────────────
 
-@bp.get("/export-excel")
+# ── GET /me/analytics — métricas agregadas para dashboard ─────────────────────
+
+@bp.get("/me/analytics")
 @barber_required
-def export_excel(barber):
-    """Genera y retorna un .xlsx con todos los turnos del barbero autenticado."""
-    from_str = request.args.get("from")
-    to_str   = request.args.get("to")
+def barber_analytics(barber):
+    """
+    Devuelve métricas agregadas del barbero autenticado para alimentar
+    el dashboard de analytics (gráficos de ingresos, no-show, horarios pico, etc).
 
-    if from_str:
-        try:
-            from_date = datetime.strptime(from_str, "%Y-%m-%d").date()
-        except ValueError:
-            return jsonify({"error": "Parámetro 'from' inválido (YYYY-MM-DD)"}), 422
-    else:
-        from_date = None
-
-    if to_str:
-        try:
-            to_date = datetime.strptime(to_str, "%Y-%m-%d").date()
-        except ValueError:
-            return jsonify({"error": "Parámetro 'to' inválido (YYYY-MM-DD)"}), 422
-    else:
-        to_date = None
-
-    # Build date filter
-    date_filter = ""
-    params = {"bid": barber.id}
-    if from_date:
-        start_utc = ART.localize(datetime(from_date.year, from_date.month, from_date.day, 0, 0)).astimezone(timezone.utc)
-        date_filter += " AND a.appointment_time >= :from_utc"
-        params["from_utc"] = start_utc
-    if to_date:
-        end_utc = ART.localize(datetime(to_date.year, to_date.month, to_date.day, 23, 59, 59)).astimezone(timezone.utc)
-        date_filter += " AND a.appointment_time <= :to_utc"
-        params["to_utc"] = end_utc
-
-    rows = db.session.execute(text(f"""
-        SELECT
-            a.appointment_time,
-            a.status,
-            a.service_name,
-            a.price,
-            a.booking_code,
-            a.absence_charge_sent,
-            a.absence_charge_amount,
-            a.verified_at,
-            COALESCE(c.full_name, u.name)        AS client_name,
-            COALESCE(c.whatsapp, a.whatsapp_number) AS client_wa,
-            COALESCE(c.dni, u.dni)                AS client_dni
-        FROM appointments a
-        LEFT JOIN clients c ON c.id = a.client_id
-        LEFT JOIN users   u ON u.id = a.user_id
-        WHERE a.barber_id = :bid
-          AND a.status != 'available'
-          {date_filter}
-        ORDER BY a.appointment_time DESC
-    """), params).mappings().all()
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Turnos"
-
-    headers = ["Hora", "Nombre cliente", "DNI", "Teléfono", "Servicio", "Precio", "Estado", "Pago"]
-    ws.append(headers)
-
-    STATUS_LABELS = {
-        "booked":      "Reservado",
-        "rescheduled": "Reprogramado",
-        "completed":   "Completado",
-        "cancelled":   "Cancelado",
-        "no_show":     "Ausente",
-    }
-
-    for r in rows:
-        appt_utc = r["appointment_time"]
-        if appt_utc.tzinfo is None:
-            appt_utc = appt_utc.replace(tzinfo=timezone.utc)
-        local_t = appt_utc.astimezone(ART)
-
-        charge_amount = int(r["absence_charge_amount"] or 0)
-        pago = f"${charge_amount:,}" if charge_amount else "—"
-
-        ws.append([
-            local_t.strftime("%H:%M"),
-            r["client_name"]  or "",
-            r["client_dni"]   or "",
-            r["client_wa"]    or "",
-            r["service_name"] or "",
-            float(r["price"]) if r["price"] else 0,
-            STATUS_LABELS.get(r["status"], r["status"]),
-            pago,
-        ])
-
-    # Auto-width columns
-    for col in ws.columns:
-        max_len = max((len(str(cell.value or "")) for cell in col), default=0)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-
-    filename = f"turnos_{barber.slug}.xlsx"
-    return send_file(
-        buf,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name=filename,
-    )
-
-
-# ── Legacy endpoint (backward compat) ─────────────────────────────────────────
-
-@bp.route("/dashboard", methods=["GET"])
-def get_dashboard():
-    barber_id = request.args.get("barber_id")
-    if not barber_id:
-        return jsonify({"error": "Falta barber_id"}), 400
+    Query params opcionales:
+      - days: cantidad de días hacia atrás a considerar (default 30)
+    """
     try:
-        result = db.session.execute(text("""
-            SELECT c.full_name, a.service_name, a.appointment_time, a.price
+        days = request.args.get("days", default=30, type=int)
+        if days <= 0 or days > 365:
+            days = 30
+
+        params = {"bid": barber.id, "days": days}
+
+        # ── 1. Ingresos por día (solo turnos completados) ──────────────────
+        revenue_by_day = db.session.execute(text("""
+            SELECT
+                DATE(a.appointment_time AT TIME ZONE 'America/Argentina/Buenos_Aires') AS day,
+                COUNT(*)                AS appointments,
+                COALESCE(SUM(a.price), 0) AS revenue
             FROM appointments a
-            JOIN clients c ON a.client_id = c.id
-            WHERE a.barber_id = :barber_id
-            ORDER BY a.appointment_time DESC
-        """), {"barber_id": barber_id})
-        rows = result.fetchall()
-        reservas = [
-            {
-                "nombre":       row[0],
-                "service_name": row[1],
-                "fecha":        row[2].strftime("%d/%m/%Y") if row[2] else "Sin fecha",
-                "hora":         row[2].strftime("%H:%M")    if row[2] else "Sin hora",
-                "price":        float(row[3]) if row[3] else 0.0,
-            }
-            for row in rows
-        ]
-        return jsonify({"reservations": reservas}), 200
+            WHERE a.barber_id = :bid
+              AND a.status = 'completed'
+              AND a.appointment_time >= NOW() - (:days || ' days')::interval
+            GROUP BY day
+            ORDER BY day
+        """), params).mappings().all()
+
+        # ── 2. Distribución por status ──────────────────────────────────────
+        status_breakdown = db.session.execute(text("""
+            SELECT a.status, COUNT(*) AS count
+            FROM appointments a
+            WHERE a.barber_id = :bid
+              AND a.status != 'available'
+              AND a.appointment_time >= NOW() - (:days || ' days')::interval
+            GROUP BY a.status
+        """), params).mappings().all()
+
+        # ── 3. Ocupación por hora del día (turnos no-disponibles) ───────────
+        hourly_load = db.session.execute(text("""
+            SELECT
+                EXTRACT(HOUR FROM a.appointment_time AT TIME ZONE 'America/Argentina/Buenos_Aires')::int AS hour,
+                COUNT(*) AS count
+            FROM appointments a
+            WHERE a.barber_id = :bid
+              AND a.status != 'available'
+              AND a.appointment_time >= NOW() - (:days || ' days')::interval
+            GROUP BY hour
+            ORDER BY hour
+        """), params).mappings().all()
+
+        # ── 4. Turnos por día de la semana ───────────────────────────────────
+        weekday_load = db.session.execute(text("""
+            SELECT
+                EXTRACT(DOW FROM a.appointment_time AT TIME ZONE 'America/Argentina/Buenos_Aires')::int AS dow,
+                COUNT(*) AS count
+            FROM appointments a
+            WHERE a.barber_id = :bid
+              AND a.status != 'available'
+              AND a.appointment_time >= NOW() - (:days || ' days')::interval
+            GROUP BY dow
+            ORDER BY dow
+        """), params).mappings().all()
+
+        # ── 5. Totales y tasa de no-show ─────────────────────────────────────
+        totals_row = db.session.execute(text("""
+            SELECT
+                COUNT(*) FILTER (WHERE a.status != 'available')               AS total_booked,
+                COUNT(*) FILTER (WHERE a.status = 'completed')                AS total_completed,
+                COUNT(*) FILTER (WHERE a.status = 'no_show')                  AS total_no_show,
+                COUNT(*) FILTER (WHERE a.status = 'cancelled')                AS total_cancelled,
+                COALESCE(SUM(a.price)        FILTER (WHERE a.status = 'completed'), 0) AS total_revenue,
+                COALESCE(SUM(a.penalty_amount) FILTER (WHERE a.penalty_paid = TRUE), 0) AS total_penalties_collected
+            FROM appointments a
+            WHERE a.barber_id = :bid
+              AND a.appointment_time >= NOW() - (:days || ' days')::interval
+        """), params).mappings().first()
+
+        total_booked = totals_row["total_booked"] or 0
+        total_no_show = totals_row["total_no_show"] or 0
+        no_show_rate = round((total_no_show / total_booked) * 100, 1) if total_booked else 0.0
+
+        WEEKDAY_LABELS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
+
+        return jsonify({
+            "period_days": days,
+            "revenue_by_day": [
+                {
+                    "date":         r["day"].strftime("%Y-%m-%d"),
+                    "appointments": r["appointments"],
+                    "revenue":      float(r["revenue"]),
+                }
+                for r in revenue_by_day
+            ],
+            "status_breakdown": [
+                {"status": r["status"], "count": r["count"]}
+                for r in status_breakdown
+            ],
+            "hourly_load": [
+                {"hour": r["hour"], "count": r["count"]}
+                for r in hourly_load
+            ],
+            "weekday_load": [
+                {"weekday": WEEKDAY_LABELS[r["dow"]], "dow": r["dow"], "count": r["count"]}
+                for r in weekday_load
+            ],
+            "totals": {
+                "total_booked":              total_booked,
+                "total_completed":           totals_row["total_completed"] or 0,
+                "total_no_show":             total_no_show,
+                "total_cancelled":           totals_row["total_cancelled"] or 0,
+                "total_revenue":             float(totals_row["total_revenue"] or 0),
+                "total_penalties_collected": float(totals_row["total_penalties_collected"] or 0),
+                "no_show_rate":              no_show_rate,
+            },
+        })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        logger.error("[barber_analytics] error: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": "internal", "detail": str(e)}), 500
