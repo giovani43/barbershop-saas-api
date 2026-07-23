@@ -2,32 +2,52 @@ name: Supabase Keep-Alive Ping
 
 on:
   schedule:
-    # Corre cada 3 días a las 10:00 UTC (más frecuente para no llegar a 7 días)
-    - cron: "0 10 */3 * *"
+    # Corre cada 2 días a las 10:00 UTC
+    - cron: "0 10 */2 * *"
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Supabase con query real
+      - name: Ping backend (que a su vez activa Supabase)
         run: |
-          RESPONSE=$(curl -s -w "\n%{http_code}" \
+          # Primero despertamos Render (puede tardar hasta 60s en cold start)
+          echo "Despertando backend en Render..."
+          curl -s --max-time 90 "https://barbershop-api-vpz8.onrender.com/health" || true
+          
+          # Esperamos a que Render esté listo
+          sleep 10
+          
+          # Ahora hacemos un request real que toca la DB
+          echo "Haciendo request a la DB via backend..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 \
+            "https://barbershop-api-vpz8.onrender.com/health")
+          
+          echo "Status: $STATUS"
+          
+          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]; then
+            echo "✅ Backend y Supabase activos"
+          else
+            echo "⚠️ Status inesperado: $STATUS — puede ser cold start de Render"
+            # No falla el workflow, solo avisa
+          fi
+          
+      - name: Ping directo a Supabase REST API
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 \
             "https://reuukyajfpjtrjsfolkq.supabase.co/rest/v1/appointments?select=id&limit=1" \
             -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJldXVreWFqZnBqdHJqc2ZvbGtxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NzIzNzUsImV4cCI6MjA5MzE0ODM3NX0.ITDXzZC1ttnbeklmYhJsS5diPE97ERk4gx0AZ1toU3Y" \
             -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJldXVreWFqZnBqdHJqc2ZvbGtxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NzIzNzUsImV4cCI6MjA5MzE0ODM3NX0.ITDXzZC1ttnbeklmYhJsS5diPE97ERk4gx0AZ1toU3Y" \
-            -H "Accept: application/json" \
-            -H "Prefer: count=exact")
+            -H "Accept: application/json")
           
-          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "Supabase status: $STATUS"
           
-          echo "HTTP Status: $HTTP_STATUS"
-          echo "Response: $BODY"
-          
-          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-            echo "✅ Supabase está activo y respondiendo"
+          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]; then
+            echo "✅ Supabase activo y respondiendo"
           else
-            echo "❌ Error inesperado: $HTTP_STATUS"
+            echo "⚠️ Supabase status: $STATUS — puede estar pausado, reactivar desde dashboard"
             exit 1
           fi
